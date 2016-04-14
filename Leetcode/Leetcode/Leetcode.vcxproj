@@ -113,13 +113,18 @@
     <ClCompile Include="..\..\..\Leetcode\LeetCode\Nested_List_WeightSum.cpp" />
     <ClCompile Include="..\..\..\Leetcode\LeetCode\Nim_Game.cpp" />
     <ClCompile Include="Add_Digits.cpp" />
+    <ClCompile Include="Balanced Binary Tree.cpp" />
     <ClCompile Include="BestTimetoBuyandSellStock.cpp" />
+    <ClCompile Include="Binary Tree Level Order Traversal II.cpp" />
     <ClCompile Include="ClimbingStairs.cpp" />
+    <ClCompile Include="ClosestBinarySearchTreeValue.cpp" />
     <ClCompile Include="Contains_Duplicate.cpp" />
     <ClCompile Include="Delete_Node_in_a_Linked List.cpp" />
     <ClCompile Include="ExcelSheetColumnNumber.cpp" />
     <ClCompile Include="flip_game.cpp" />
     <ClCompile Include="HappyNumber.cpp" />
+    <ClCompile Include="HouseRobber.cpp" />
+    <ClCompile Include="Implement Queue using Stacks.cpp" />
     <ClCompile Include="Invert_Binary_Tree.cpp" />
     <ClCompile Include="LowestCommonAncestorofaBinarySearchTree.cpp" />
     <ClCompile Include="Majority_Element.cpp" />
@@ -131,6 +136,8 @@
     <ClCompile Include="Numberof1Bits.cpp" />
     <ClCompile Include="Palindrome Permutation.cpp" />
     <ClCompile Include="PowerofTwo.cpp" />
+    <ClCompile Include="Remove Duplicates from Sorted Array.cpp" />
+    <ClCompile Include="Remove Element.cpp" />
     <ClCompile Include="RemoveDuplicatesfromSortedList.cpp" />
     <ClCompile Include="Reverse_Linked_List.cpp" />
     <ClCompile Include="Roman_to_Integer.cpp" />
@@ -138,6 +145,7 @@
     <ClCompile Include="Shortest_Word_Distance.cpp" />
     <ClCompile Include="StrobogrammaticNumber.cpp" />
     <ClCompile Include="SwapNodesinPairs.cpp" />
+    <ClCompile Include="Symmetric Tree.cpp" />
     <ClCompile Include="UglyNumber.cpp" />
     <ClCompile Include="Valid_Anagram.cpp" />
   </ItemGroup>
