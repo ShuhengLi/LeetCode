@@ -116,8 +116,10 @@
     <ClCompile Include="Balanced Binary Tree.cpp" />
     <ClCompile Include="BestTimetoBuyandSellStock.cpp" />
     <ClCompile Include="Binary Tree Level Order Traversal II.cpp" />
+    <ClCompile Include="Bulls and Cows.cpp" />
     <ClCompile Include="ClimbingStairs.cpp" />
     <ClCompile Include="ClosestBinarySearchTreeValue.cpp" />
+    <ClCompile Include="Contains Duplicate II.cpp" />
     <ClCompile Include="Contains_Duplicate.cpp" />
     <ClCompile Include="Delete_Node_in_a_Linked List.cpp" />
     <ClCompile Include="ExcelSheetColumnNumber.cpp" />
@@ -130,11 +132,13 @@
     <ClCompile Include="Implement Stack using Queues.cpp" />
     <ClCompile Include="Intersection of Two Linked Lists.cpp" />
     <ClCompile Include="Invert_Binary_Tree.cpp" />
+    <ClCompile Include="Isomorphic Strings.cpp" />
     <ClCompile Include="LowestCommonAncestorofaBinarySearchTree.cpp" />
     <ClCompile Include="Majority_Element.cpp" />
     <ClCompile Include="MaximumSizeSubarraySumEqualsk.cpp" />
     <ClCompile Include="Maximum_Depth_of_Binary_Tree.cpp" />
     <ClCompile Include="Meeting_Room.cpp" />
+    <ClCompile Include="Merge Sorted Array.cpp" />
     <ClCompile Include="MergeTwoSortedLists.cpp" />
     <ClCompile Include="Minimum Depth of Binary Tree.cpp" />
     <ClCompile Include="Move_Zero.cpp" />
@@ -147,6 +151,7 @@
     <ClCompile Include="Path Sum.cpp" />
     <ClCompile Include="Plus One.cpp" />
     <ClCompile Include="PowerofTwo.cpp" />
+    <ClCompile Include="Rectangle Area.cpp" />
     <ClCompile Include="Remove Duplicates from Sorted Array.cpp" />
     <ClCompile Include="Remove Element.cpp" />
     <ClCompile Include="RemoveDuplicatesfromSortedList.cpp" />
@@ -158,9 +163,18 @@
     <ClCompile Include="SwapNodesinPairs.cpp" />
     <ClCompile Include="Symmetric Tree.cpp" />
     <ClCompile Include="UglyNumber.cpp" />
+    <ClCompile Include="Valid Parentheses.cpp" />
     <ClCompile Include="Valid Sudoku.cpp" />
     <ClCompile Include="Valid_Anagram.cpp" />
     <ClCompile Include="Binary Tree Level Order Traversal.cpp" />
+    <ClCompile Include="Reverse Bits.cpp" />
+    <ClCompile Include="Remove Nth Node From End of List.cpp" />
+    <ClCompile Include="Length of Last Word.cpp" />
+    <ClCompile Include="Word Pattern.cpp" />
+    <ClCompile Include="Remove Linked List Elements.cpp" />
+    <ClCompile Include="Binary Tree Paths.cpp" />
+    <ClCompile Include="Longest Common Prefix.cpp" />
+    <ClCompile Include="Palindrome Linked List.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
