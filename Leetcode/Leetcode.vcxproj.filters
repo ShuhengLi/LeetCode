@@ -210,5 +210,56 @@
     <ClCompile Include="Palindrome Linked List.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Compare Version Numbers.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="String to Integer (atoi) .cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Rotate Array  .cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Excel Sheet Column Titlecpp.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Min Stack.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="First Bad Version  .cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Two Sum.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Reverse Integer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Valid Palindrome.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ZigZag Conversion .cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Count Primes.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Counting Bits.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Single Number.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Wiggle Sort.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Two Sum II - Input array is sorted.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Sparse Matrix Multiplication.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Product of Array Except Self  .cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
