@@ -1,0 +1,32 @@
+/* 222. Count Complete Tree Nodes
+ * Given a complete binary tree, count the number of nodes.
+
+Note:
+
+Definition of a complete binary tree from Wikipedia:
+In a complete binary tree every level, except possibly the last, is completely filled, and all nodes in the last level are as far left as possible. It can have between 1 and 2h nodes inclusive at the last level h.
+
+Example:
+
+Input:
+    1
+   / \
+  2   3
+ / \  /
+4  5 6
+
+Output: 6
+*/
+class Solution {
+public:
+    int countNodes(TreeNode* root) {
+        if(!root) return 0;
+        int nodes = 1;
+        int left = 0;
+        int right = 0;
+        if(root-> left) left = countNodes(root->left);
+        if(root-> right) right = countNodes(root->right);
+        return nodes + left + right;
+
+    }
+};
