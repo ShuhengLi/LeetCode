@@ -12,6 +12,7 @@ Input: 10
 Output: 36
 Explanation: 10 = 3 + 3 + 4, 3 × 3 × 4 = 36.
 */
+//left and right check table
 class Solution {
 public:
     int integerBreak(int n) {
@@ -28,3 +29,20 @@ public:
         return a[n];
     }
 };//Time: O(N^2)
+
+//only left check table
+class Solution {
+public:
+    int integerBreak(int n) {
+        vector<int> a(n+1, 0);
+        a[1] = 1;
+        for(int i = 2; i <= n; i ++){
+            int global = 0;
+            for(int j = 1; j<= i; j++){
+                global = max( j * max(i - j , a[i - j]), global);
+            }
+            a[i] = global;
+        }
+        return a[n];
+    }
+};
