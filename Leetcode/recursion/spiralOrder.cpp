@@ -28,9 +28,9 @@ public:
         if(matrix.empty()) return res;
         if(matrix[0].empty()) return res;
         int rows = matrix.size();
-        int size = matrix[0].size();
+        int column = matrix[0].size();
         nums = rows * size;
-        spiral(matrix, 0, size, rows, 0);
+        spiral(matrix, 0, column, rows, 0);
         return res;
 
     }
