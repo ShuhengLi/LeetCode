@@ -23,17 +23,10 @@ public:
                 large -> next = head;
                 large = large -> next;
             }
-            auto temp = head -> next;
-            head -> next = NULL;//KEY!!!!! cut all node 
-            head = temp;
+            head = head -> next;
         }
-        ListNode* res;
-        if(dummy1->next){
-            res = dummy1->next;
-            small -> next = dummy2->next;
-        }else{
-            res = dummy2->next;
-        }
-        return res;
+        small -> next = dummy2->next;
+        large -> next = NULL;
+        return dummy1 -> next;
     }
 };

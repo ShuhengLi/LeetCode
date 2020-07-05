@@ -1,3 +1,4 @@
+//abbbccc => ab3c3
 class Solution {
 public:
     int compress(vector<char>& chars) {

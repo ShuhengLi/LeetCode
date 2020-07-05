@@ -1,3 +1,4 @@
+//check duplicate chars
 bool isUnique(string s){
   if(s.empty()) return true;
   unsigned dic = 0;

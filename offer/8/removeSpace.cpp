@@ -1,3 +1,4 @@
+//____a____b___c____ => a_b_c
 void removeSpace(string s){
   int i = 0, j = 0;
   int count = 0;

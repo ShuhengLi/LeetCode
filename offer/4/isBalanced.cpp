@@ -33,3 +33,23 @@ public:
     }
 };
 //Time: O(nlogN)
+
+class Solution {
+public:
+    bool isBalanced(TreeNode* root) {
+          if(!root) return true;
+        int res =  getHeight(root);
+        return res != -1;
+    }
+    int getHeight(TreeNode* root){
+        if(!root) return 0;
+        int left = getHeight(root->left);
+        int right = getHeight(root->right);
+        if(left == -1 || right == -1){
+            return -1;
+        }
+        if(abs(left - right) > 1) return -1;
+        return max(left, right) + 1;
+    }
+};
+//Time:O(N)

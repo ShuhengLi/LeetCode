@@ -45,8 +45,6 @@ public:
                     count++;
                 }
                 m[s[slow]]++;
-                cout << m[s[slow]]<< endl;
-
             }
             slow++;
 
