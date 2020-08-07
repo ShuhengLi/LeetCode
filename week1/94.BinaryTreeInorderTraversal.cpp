@@ -24,8 +24,7 @@ public:
                 todo.push(root);
                 root = root -> left;
             }
-            root = todo.top();
-            todo.pop();
+            root = todo.top(); todo.pop();
             nodes.push_back(root -> val);
             root = root -> right;
         }
