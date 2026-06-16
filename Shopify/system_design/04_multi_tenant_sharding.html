@@ -1,0 +1,1046 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · Multi-Tenant Pods &amp; Sharding — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 04 · Multi-tenant Pods</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="03_checkout_payments.html"><span class="n">←</span> 03 Checkout</a>
+    <a href="05_shopping_cart.html"><span class="n">→</span> 05 Cart</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 1 · Signature · ★★★★☆</div>
+      <h1><span class="en">Design Shopify's Multi-Tenant Architecture &amp; Sharding (Pods)</span><span class="zh">设计 Shopify 的多租户架构与分片（Pods）</span></h1>
+      <p><span class="en">Millions of independent stores share infrastructure. The challenge: <strong>route every request to the right data, isolate tenants so one store's incident can't hurt others, and move a shop between shards with zero downtime.</strong>
+      This mirrors Shopify's real Pods architecture — sharded MySQL grouped into self-contained failure domains, routed by <code>shop_id</code>.</span><span class="zh">数百万独立商店共享同一基础设施。核心挑战：<strong>将每个请求路由到正确的数据、隔离租户以防止单个商店的故障影响他人，并实现 shop 在 shard 间的零停机迁移。</strong>
+      这与 Shopify 真实的 Pods 架构相对应——以 <code>shop_id</code> 为键的分片 MySQL，按 Pod 组织为自包含的故障域。</span></p>
+      <div class="meta">
+        <span class="chip"><span class="en">Framing: fairness &amp; blast-radius isolation</span><span class="zh">考察点：公平性与爆炸半径隔离</span></span>
+        <span class="chip"><span class="en">Tests: sharding + tenancy models</span><span class="zh">考察：分片与租户模型</span></span>
+        <span class="chip">⏱ 60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why Shopify loves this one</span><span class="zh">为何 Shopify 青睐这道题</span></span>
+      <span class="en">It exposes whether you understand <strong>operational tenancy at scale</strong>: not just "put a <code>tenant_id</code> column on tables" but the hard engineering of shard routing, blast-radius containment, online data movement, and skew handling when the top 0.1% of merchants generate a disproportionate share of traffic. Generic "add replicas" thinking actively misleads here.</span><span class="zh">这道题能揭示你是否真正理解<strong>规模化运营下的多租户</strong>：不只是"在表里加一列 <code>tenant_id</code>"，而是 shard 路由、爆炸半径限制、在线数据迁移，以及当 top 0.1% 的商户产生不成比例的流量时的倾斜处理。泛泛的"加副本"思路在这里会适得其反。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 先问再假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Every request is <strong>shop-scoped</strong>; route it to the correct shard without the caller knowing.</span><span class="zh">每个请求都以 <strong>shop 为范围</strong>；在调用方无感知的情况下将其路由到正确的 shard。</span></li>
+            <li><span class="en">Onboard new shops (assign to a shard, zero-downtime).</span><span class="zh">新 shop 上线（分配 shard，零停机）。</span></li>
+            <li><span class="en">Admin and support tools may need <strong>cross-shop views</strong> (scatter-gather or derived store).</span><span class="zh">管理和支持工具可能需要<strong>跨 shop 视图</strong>（散射收集或派生存储）。</span></li>
+            <li><span class="en">Rebalance or <strong>move a shop between shards</strong> without taking the shop offline.</span><span class="zh">在不使 shop 下线的情况下，对 shop 进行<strong>跨 shard 迁移或再平衡</strong>。</span></li>
+            <li><span class="en">Per-tenant data residency — pin shops to a geographic region (GDPR).</span><span class="zh">租户级数据驻留——将 shop 固定到特定地理区域（GDPR）。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>Tenant isolation</strong> — a noisy, overloaded, or misbehaving shop must not hurt others.</span><span class="zh"><strong>租户隔离</strong>——吵闹、过载或行为异常的 shop 不得影响其他 shop。</span></li>
+            <li><span class="en"><strong>Blast-radius containment</strong> — a pod failure or bad deploy affects only that pod's shops.</span><span class="zh"><strong>爆炸半径限制</strong>——Pod 故障或错误发布只影响该 Pod 内的 shop。</span></li>
+            <li><span class="en"><strong>Horizontal scalability</strong> to millions of shops by adding pods, not re-architecting.</span><span class="zh"><strong>水平扩展性</strong>——通过增加 Pod 而非重构架构，支撑数百万 shop。</span></li>
+            <li><span class="en"><strong>Online migration</strong> — move a shop with zero downtime and no data loss.</span><span class="zh"><strong>在线迁移</strong>——零停机、零数据丢失地迁移 shop。</span></li>
+            <li><span class="en"><strong>Skew tolerance</strong> — the top 0.1% of merchants are orders of magnitude larger than the median.</span><span class="zh"><strong>倾斜容忍</strong>——top 0.1% 的商户体量比中位数商户大出数个量级。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to actually ask out loud</span><span class="zh">面试中应当大声提问的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Is "tenant" always one shop, or can an enterprise own multiple shops sharing a shard? <em>(Assume shop = tenant unit.)</em></span><span class="zh">"租户"是否始终等于一个 shop，还是企业可以拥有多个 shop 共享一个 shard？<em>（假设 shop = 租户单元。）</em></span></li>
+          <li><span class="en">What isolation level is required? Shared-table (cheap) vs schema-per-tenant vs shard-per-group? <em>(This is the crux — state you'll walk through all three.)</em></span><span class="zh">需要什么隔离级别？共享表（成本最低）vs 每租户独立 schema vs 每组独立 shard？<em>（这是核心——说明你将逐一讲解三种方案。）</em></span></li>
+          <li><span class="en">Do we need strict data residency today, or just a future hook? GDPR changes pod assignment strategy.</span><span class="zh">现在就需要严格的数据驻留，还是只需为未来预留钩子？GDPR 会改变 Pod 分配策略。</span></li>
+          <li><span class="en">How skewed is traffic? Do we have whale merchants that dwarf an entire shard? <em>(Triggers dedicated-pod discussion.)</em></span><span class="zh">流量倾斜程度如何？是否有"鲸鱼商户"让整个 shard 相形见绌？<em>（引出专用 Pod 讨论。）</em></span></li>
+          <li><span class="en">Are cross-tenant queries required in the hot path (admin dashboards, analytics) or only offline?</span><span class="zh">跨租户查询是否需要在热路径（管理仪表板、分析）中支持，还是只在离线场景使用？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找到真正的瓶颈</span></span></div>
+      <p><span class="en">The insight that wins the round: <strong>the bottleneck is the routing lookup and shard-map distribution, not any single shop's request volume.</strong>
+      No individual tenant is large — the challenge is running millions of independent workloads on shared infrastructure without letting the largest ones crowd out the smallest.</span><span class="zh">赢得面试的关键洞察：<strong>瓶颈在于路由查找与 shard map 的分发，而非任何单个 shop 的请求量。</strong>
+      没有哪个租户体量足够大——挑战在于在共享基础设施上运行数百万个独立工作负载，同时不让最大的那些挤占最小的。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">~3M</div><div class="l">active shops (tenants)</div></div>
+        <div class="kpi"><div class="v">~200k</div><div class="l">routed requests / second (peak)</div></div>
+        <div class="kpi"><div class="v">~1,000</div><div class="l">MySQL shards across all pods</div></div>
+        <div class="kpi"><div class="v">top 0.1%</div><div class="l">merchants drive ~30–40% of GMV</div></div>
+      </div>
+      <ul>
+        <li><span class="en"><strong>Shard map lookups</strong>: every request reads <code>shop_id → shard → pod</code>. At 200k RPS this map must be edge-cached — a cache miss to a central store must be microseconds, not a DB round-trip.</span><span class="zh"><strong>Shard map 查询</strong>：每个请求都要读取 <code>shop_id → shard → pod</code>。在 200k RPS 下，该 map 必须在边缘缓存——缓存未命中回源的延迟必须是微秒级，而不是一次 DB 往返。</span></li>
+        <li><span class="en"><strong>Writes per shard</strong>: distributed across ~1k shards, median shard sees ~200 writes/s — easily within a single MySQL instance. The issue is <em>hot shards</em> caused by skewed merchants.</span><span class="zh"><strong>每个 shard 的写入量</strong>：分散在约 1k 个 shard 上，中位数 shard 约每秒 200 次写入——单个 MySQL 实例轻松应对。问题在于大商户导致的<em>热 shard</em>。</span></li>
+        <li><span class="en"><strong>Pod count</strong>: 10–20 pods per region, each owning ~50–100 shards. A pod failure affects 1–5% of shops, not all of them.</span><span class="zh"><strong>Pod 数量</strong>：每个区域 10–20 个 Pod，每个 Pod 拥有约 50–100 个 shard。一个 Pod 故障仅影响 1–5% 的 shop，而非全部。</span></li>
+        <li><span class="en"><strong>Migration bandwidth</strong>: moving a large merchant's shop (say 50 GB) at 100 MB/s copy rate takes ~8 min; the change-log replay tail is the real constraint on flip latency.</span><span class="zh"><strong>迁移带宽</strong>：以 100 MB/s 复制速率迁移一个大商户的 shop（约 50 GB）需要约 8 分钟；变更日志回放的追尾才是切换延迟的真正瓶颈。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">State explicitly: <em>"I will not design a DB-per-tenant system — millions of tenants make per-tenant databases operationally impossible. Instead, I will shard groups of shops into MySQL instances, bundle those instances into self-contained pods for blast-radius isolation, and keep the routing brain in a small, highly-available shard-map service."</em></span><span class="zh">明确表态：<em>"我不会设计每租户独立数据库的方案——数百万租户让每租户一个数据库在运营上根本不可行。我将把多组 shop 分片到 MySQL 实例中，把这些实例打包进自包含的 Pod 以限制爆炸半径，并将路由核心保持在一个小型、高可用的 shard map 服务中。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API / routing contract</span><span class="zh">API / 路由契约</span></h2><span class="sub"><span class="en">infrastructure design — keep the surface small</span><span class="zh">基础设施设计——保持接口面尽量小</span></span></div>
+      <p><span class="en">This is an infrastructure design; the external API is the merchant and storefront API. The internal routing contract is what matters.</span><span class="zh">这是一道基础设施设计题；对外的 API 是商户和店面 API，内部路由契约才是关键。</span></p>
+      <div class="api">
+        <div class="row"><span class="method get">GET</span><span class="path">/internal/shard-map/{shopId}</span><span class="desc">→ {shardId, podId, region} — read from cache first</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/internal/shard-map/{shopId}</span><span class="desc">assign a new shop to a shard (onboarding)</span></div>
+        <div class="row"><span class="method put">PUT</span><span class="path">/internal/shard-map/{shopId}</span><span class="desc">atomic shard-map flip (final step of shop migration)</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/internal/shop-mover/jobs</span><span class="desc">{shopId, targetShardId} — initiate an online shop move</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/internal/shop-mover/jobs/{jobId}</span><span class="desc">→ {phase, progress, etaSeconds} — monitor migration</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/internal/admin/scatter?query=…</span><span class="desc">cross-shard admin query (offline-only, async)</span></div>
+      </div>
+      <p><span class="en">Every <strong>inbound request</strong> carries a resolvable shop identity — typically the custom domain or subdomain (e.g. <code>acme.myshopify.com</code>). The router resolves this to a <code>shop_id</code>, looks up the shard map (from an edge-local cache), and forwards to the correct pod. The caller never sees shard or pod IDs.</span><span class="zh">每个<strong>入站请求</strong>都携带可解析的 shop 标识——通常是自定义域名或子域名（如 <code>acme.myshopify.com</code>）。路由器将其解析为 <code>shop_id</code>，从边缘本地缓存查找 shard map，然后转发到正确的 Pod。调用方永远看不到 shard 或 Pod ID。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Global shard-map store (small, replicated everywhere)</span><span class="zh">全局 shard map 存储（体量小，全球复制）</span></h4>
+      <pre><code><span class="k">shop_shard_map</span>(
+  <span class="n">shop_id</span>     BIGINT PK,          <span class="c">-- shard key for all tenant data</span>
+  shard_id    SMALLINT NOT NULL,   <span class="c">-- which MySQL shard</span>
+  pod_id      SMALLINT NOT NULL,   <span class="c">-- which pod owns that shard</span>
+  region      VARCHAR(8),          <span class="c">-- e.g. 'us-east', 'eu-west' (GDPR pinning)</span>
+  status      ENUM(<span class="s">'active'</span>, <span class="s">'migrating'</span>, <span class="s">'frozen'</span>),
+  moved_at    TIMESTAMP
+)
+<span class="c">-- Tiny table: ~3M rows × 30 bytes ≈ 90 MB. Fits in memory of any replica.</span>
+<span class="c">-- Cached at edge; invalidated on every PUT /shard-map/{shopId}.</span></code></pre>
+
+      <h4><span class="en">Per-shard schema (shared tables, shop_id on every row)</span><span class="zh">每 shard 的 schema（共享表，每行都带 shop_id）</span></h4>
+      <pre><code><span class="c">-- Every table in the per-shard MySQL instance carries shop_id.</span>
+<span class="c">-- PK is always (shop_id, entity_id) for locality.</span>
+<span class="k">products</span>(<span class="n">shop_id</span>, product_id, title, status, …)
+<span class="k">orders</span>(<span class="n">shop_id</span>, order_id, customer_id, total, created_at, …)
+<span class="k">customers</span>(<span class="n">shop_id</span>, customer_id, email, …)
+<span class="k">inventory_items</span>(<span class="n">shop_id</span>, item_id, available_qty, …)
+<span class="c">-- Indexes always include shop_id as leading key.</span>
+<span class="c">-- Cross-shop queries are prohibited on the hot path.</span></code></pre>
+
+      <h4><span class="en">Global services (outside pods — not sharded)</span><span class="zh">全局服务（Pod 之外，不分片）</span></h4>
+      <pre><code><span class="k">shop_identity</span>(<span class="n">shop_id</span>, domain, plan, billing_id, …)   <span class="c">-- global DB</span>
+<span class="k">billing_subscriptions</span>(<span class="n">shop_id</span>, plan, mrr, …)          <span class="c">-- global DB</span>
+<span class="k">analytics_events</span>(shop_id, event_type, ts, payload)     <span class="c">-- columnar store (CDC fan-out)</span></code></pre>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">edge routing → shard map → pods</span><span class="zh">边缘路由 → shard map → Pod</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#2563eb"/>
+            </marker>
+            <marker id="ahg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#008060"/>
+            </marker>
+            <marker id="aho" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- ─── Arrows top section ─── -->
+          <!-- Clients -> Edge/Router -->
+          <line x1="360" y1="52" x2="360" y2="80" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- Edge -> Shard-Map Lookup -->
+          <line x1="360" y1="130" x2="360" y2="156" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ahb)"/>
+          <!-- Shard-Map Lookup -> shard-map cache (right) -->
+          <line x1="500" y1="185" x2="574" y2="185" stroke="#dc2626" stroke-width="1.5" fill="none" marker-end="url(#ah)" stroke-dasharray="4 3"/>
+          <!-- Shard-Map Lookup -> Pod A (left arrow down) -->
+          <line x1="240" y1="210" x2="165" y2="280" stroke="#008060" stroke-width="1.6" fill="none" marker-end="url(#ahg)"/>
+          <!-- Shard-Map Lookup -> Pod B (straight down) -->
+          <line x1="360" y1="210" x2="360" y2="280" stroke="#008060" stroke-width="1.6" fill="none" marker-end="url(#ahg)"/>
+          <!-- Shard-Map Lookup -> Pod N (right arrow down) -->
+          <line x1="480" y1="210" x2="555" y2="280" stroke="#008060" stroke-width="1.6" fill="none" marker-end="url(#ahg)"/>
+
+          <!-- CDC fan-out from pods to analytics (bottom) -->
+          <line x1="130" y1="470" x2="300" y2="528" stroke="#ea580c" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#aho)"/>
+          <line x1="360" y1="470" x2="360" y2="528" stroke="#ea580c" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#aho)"/>
+          <line x1="590" y1="470" x2="430" y2="528" stroke="#ea580c" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#aho)"/>
+
+          <!-- Global shard-map service (far right) -->
+          <line x1="700" y1="200" x2="700" y2="155" stroke="#7c3aed" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+
+          <!-- ─── NODES ─── -->
+
+          <!-- Clients -->
+          <rect x="265" y="8" width="190" height="44" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+          <text x="360" y="27" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Merchant &amp; Storefront Clients</text>
+          <text x="360" y="44" text-anchor="middle" font-size="10.5" fill="#64748b">web / mobile / API — carry domain / shop_id</text>
+
+          <!-- Edge / Router -->
+          <rect x="230" y="80" width="260" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+          <text x="360" y="101" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">Edge / Router</text>
+          <text x="360" y="118" text-anchor="middle" font-size="10.5" fill="#2563eb">resolves domain → shop_id · TLS termination · WAF</text>
+
+          <!-- Shard-Map Lookup Service -->
+          <rect x="220" y="156" width="280" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="360" y="178" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Shard-Map Lookup Service</text>
+          <text x="360" y="195" text-anchor="middle" font-size="10.5" fill="#008060">shop_id → shard_id → pod_id (edge-cached, L1+L2)</text>
+
+          <!-- Shard-Map Cache (right of lookup) -->
+          <rect x="576" y="160" width="172" height="48" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="662" y="181" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">Shard-Map Cache</text>
+          <text x="662" y="198" text-anchor="middle" font-size="10.5" fill="#dc2626">Redis · edge-local replica</text>
+
+          <!-- Global Shard-Map Store (far right, below cache) -->
+          <rect x="640" y="208" width="172" height="48" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="726" y="229" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6d28d9">Global Shard-Map DB</text>
+          <text x="726" y="246" text-anchor="middle" font-size="10.5" fill="#7c3aed">MySQL · replicated to all regions</text>
+
+          <!-- POD A -->
+          <rect x="34" y="278" width="192" height="192" rx="9" fill="#f9fefb" stroke="#008060" stroke-width="2"/>
+          <text x="130" y="300" text-anchor="middle" font-size="12" font-weight="800" fill="#04684f">POD A</text>
+          <text x="130" y="315" text-anchor="middle" font-size="10" fill="#008060">(shops 1 … 300k)</text>
+          <!-- Pod A internals -->
+          <rect x="50" y="322" width="155" height="34" rx="6" fill="#ecfdf5" stroke="#008060" stroke-width="1.2"/>
+          <text x="127" y="337" text-anchor="middle" font-size="11" font-weight="700" fill="#04684f">App Servers</text>
+          <text x="127" y="350" text-anchor="middle" font-size="9.5" fill="#008060">stateless · auto-scale</text>
+          <rect x="50" y="365" width="155" height="34" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.2"/>
+          <text x="127" y="380" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">MySQL Shard(s)</text>
+          <text x="127" y="393" text-anchor="middle" font-size="9.5" fill="#7c3aed">primary + replicas</text>
+          <rect x="50" y="408" width="155" height="34" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="1.2"/>
+          <text x="127" y="423" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">Redis Cache</text>
+          <text x="127" y="436" text-anchor="middle" font-size="9.5" fill="#dc2626">session · hot data</text>
+
+          <!-- POD B -->
+          <rect x="264" y="278" width="192" height="192" rx="9" fill="#f9fefb" stroke="#008060" stroke-width="2"/>
+          <text x="360" y="300" text-anchor="middle" font-size="12" font-weight="800" fill="#04684f">POD B</text>
+          <text x="360" y="315" text-anchor="middle" font-size="10" fill="#008060">(shops 300k … 600k)</text>
+          <rect x="280" y="322" width="155" height="34" rx="6" fill="#ecfdf5" stroke="#008060" stroke-width="1.2"/>
+          <text x="357" y="337" text-anchor="middle" font-size="11" font-weight="700" fill="#04684f">App Servers</text>
+          <text x="357" y="350" text-anchor="middle" font-size="9.5" fill="#008060">stateless · auto-scale</text>
+          <rect x="280" y="365" width="155" height="34" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.2"/>
+          <text x="357" y="380" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">MySQL Shard(s)</text>
+          <text x="357" y="393" text-anchor="middle" font-size="9.5" fill="#7c3aed">primary + replicas</text>
+          <rect x="280" y="408" width="155" height="34" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="1.2"/>
+          <text x="357" y="423" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">Redis Cache</text>
+          <text x="357" y="436" text-anchor="middle" font-size="9.5" fill="#dc2626">session · hot data</text>
+
+          <!-- POD N -->
+          <rect x="494" y="278" width="192" height="192" rx="9" fill="#f9fefb" stroke="#008060" stroke-width="2"/>
+          <text x="590" y="300" text-anchor="middle" font-size="12" font-weight="800" fill="#04684f">POD N</text>
+          <text x="590" y="315" text-anchor="middle" font-size="10" fill="#008060">(shops 2.7M … 3M)</text>
+          <rect x="510" y="322" width="155" height="34" rx="6" fill="#ecfdf5" stroke="#008060" stroke-width="1.2"/>
+          <text x="587" y="337" text-anchor="middle" font-size="11" font-weight="700" fill="#04684f">App Servers</text>
+          <text x="587" y="350" text-anchor="middle" font-size="9.5" fill="#008060">stateless · auto-scale</text>
+          <rect x="510" y="365" width="155" height="34" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.2"/>
+          <text x="587" y="380" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">MySQL Shard(s)</text>
+          <text x="587" y="393" text-anchor="middle" font-size="9.5" fill="#7c3aed">primary + replicas</text>
+          <rect x="510" y="408" width="155" height="34" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="1.2"/>
+          <text x="587" y="423" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">Redis Cache</text>
+          <text x="587" y="436" text-anchor="middle" font-size="9.5" fill="#dc2626">session · hot data</text>
+
+          <!-- Pod ellipsis label -->
+          <text x="240" y="382" text-anchor="middle" font-size="18" fill="#9aa3b2" font-weight="700">…</text>
+
+          <!-- Analytics Store (bottom) -->
+          <rect x="220" y="530" width="280" height="48" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="360" y="552" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c2410c">Analytics / Derived Store</text>
+          <text x="360" y="569" text-anchor="middle" font-size="10.5" fill="#ea580c">CDC fan-out (Kafka) → columnar store · no live scatter-gather</text>
+
+          <!-- Online Shop Mover (bottom-right, global service) -->
+          <line x1="660" y1="500" x2="624" y2="471" stroke="#7c3aed" stroke-width="1.3" fill="none" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+          <rect x="600" y="500" width="210" height="50" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="705" y="521" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">Online Shop Mover</text>
+          <text x="705" y="538" text-anchor="middle" font-size="9.5" fill="#7c3aed">copy → replay → verify → atomic flip</text>
+
+          <!-- CDC arrow label -->
+          <text x="200" y="506" font-size="9.5" fill="#ea580c" text-anchor="middle">CDC fan-out</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge / router</span>
+          <span><i style="background:#008060"></i> service / pod</span>
+          <span><i style="background:#dc2626"></i> cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> async / CDC</span>
+        </div>
+        <div class="cap"><span class="en">Request flow: clients → Edge → Shard-Map Lookup (cache hit) → target Pod. Each Pod is a self-contained failure domain. CDC fan-out feeds a derived analytics store for cross-shop queries.</span><span class="zh">请求流向：客户端 → 边缘层 → Shard-Map 查询（命中缓存）→ 目标 Pod。每个 Pod 是自包含的故障域。CDC 扇出将数据推送到派生分析存储，用于跨 shop 查询。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件逐项说明</span></h4>
+      <ul>
+        <li><span class="en"><strong>Edge / Router</strong> — resolves the incoming domain/subdomain to a <code>shop_id</code>, terminates TLS, enforces WAF rules. All subsequent routing is internal and invisible to the caller.</span><span class="zh"><strong>边缘层 / 路由器</strong>——将入站域名/子域名解析为 <code>shop_id</code>，终止 TLS，执行 WAF 规则。后续所有路由均在内部完成，对调用方透明。</span></li>
+        <li><span class="en"><strong>Shard-Map Lookup Service</strong> — the routing brain. Reads from an edge-local Redis replica on the fast path (sub-millisecond). On cache miss, queries the Global Shard-Map DB. All writes (assignments, flips) go to the global DB first, then invalidate the cache.</span><span class="zh"><strong>Shard-Map 查询服务</strong>——路由核心大脑。快速路径从边缘本地 Redis 副本读取（亚毫秒）。缓存未命中时查询全局 Shard-Map DB。所有写入（分配、切换）先写全局 DB，再使缓存失效。</span></li>
+        <li><span class="en"><strong>Global Shard-Map DB</strong> — a small, geo-replicated MySQL instance (or equivalent). The source of truth for which shop lives in which shard and pod. Tiny data footprint: ~90 MB for 3 M shops.</span><span class="zh"><strong>全局 Shard-Map DB</strong>——一个小型、跨地域复制的 MySQL 实例（或等效方案）。记录每个 shop 所在 shard 和 Pod 的权威来源。数据量极小：3M 个 shop 约 90 MB。</span></li>
+        <li><span class="en"><strong>Pods</strong> — the blast-radius isolation unit. Each pod bundles its own app servers, MySQL shard(s), and Redis. A pod crash, bad deploy, or overloaded shard affects only its shops. You can deploy, scale, or roll back a pod independently.</span><span class="zh"><strong>Pod</strong>——爆炸半径隔离单元。每个 Pod 捆绑了自己的应用服务器、MySQL shard 和 Redis。Pod 崩溃、错误发布或 shard 过载只影响该 Pod 内的 shop。可以独立对 Pod 进行部署、扩容或回滚。</span></li>
+        <li><span class="en"><strong>Online Shop Mover</strong> — a background service that migrates a shop between shards via snapshot + change-log replay + atomic map flip. Lives outside pods; touches both source and target.</span><span class="zh"><strong>在线 Shop Mover</strong>——一个后台服务，通过快照 + 变更日志回放 + 原子 map 切换来迁移 shop。部署在 Pod 之外，同时操作源和目标 shard。</span></li>
+        <li><span class="en"><strong>Analytics / Derived Store</strong> — cross-shop queries are prohibited on the live shards. A CDC fan-out (via Kafka/Debezium) streams changes into a columnar store (e.g., ClickHouse). Admin and analytics read from there, never from the live pods.</span><span class="zh"><strong>分析 / 派生存储</strong>——禁止在实时 shard 上执行跨 shop 查询。CDC 扇出（通过 Kafka/Debezium）将变更流入列式存储（如 ClickHouse）。管理和分析查询从这里读取，永远不直接访问实时 Pod。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度剖析</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在之处</span></span></div>
+
+      <h3><span class="en">① Tenancy models compared — why Shopify chose shard-per-group</span><span class="zh">① 租户模型对比——Shopify 为何选择每组独立 shard</span></h3>
+      <p><span class="en">There are three levels of tenant isolation in a relational database, each with a different cost/isolation trade-off:</span><span class="zh">关系型数据库中有三个级别的租户隔离，各有不同的成本/隔离权衡：</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Model</span><span class="zh">模型</span></th><th><span class="en">Isolation</span><span class="zh">隔离性</span></th><th><span class="en">Cost / Ops overhead</span><span class="zh">成本 / 运维开销</span></th><th><span class="en">Suitable for</span><span class="zh">适用场景</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Shared table (<code>shop_id</code> column)</span><span class="zh">共享表（<code>shop_id</code> 列）</span></td>
+            <td><span class="en">Weakest — one runaway query can lock all tenants; same schema for all</span><span class="zh">最弱——一个失控查询可锁住所有租户；所有租户共用同一 schema</span></td>
+            <td><span class="en">Cheapest: one DB cluster, one schema</span><span class="zh">最便宜：一个 DB 集群，一个 schema</span></td>
+            <td><span class="en">Early stage; homogeneous, small tenants</span><span class="zh">早期阶段；同质化、体量小的租户</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Schema-per-tenant</span><span class="zh">每租户独立 schema</span></td>
+            <td><span class="en">Logical isolation; a buggy migration only touches one schema</span><span class="zh">逻辑隔离；有问题的迁移只影响一个 schema</span></td>
+            <td><span class="en">Medium; schema count grows; migration tooling is complex</span><span class="zh">中等；schema 数量随租户增长；迁移工具复杂</span></td>
+            <td><span class="en">Hundreds to low thousands of tenants</span><span class="zh">数百到数千个租户</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Shard-per-group (Shopify's choice)</span><span class="zh">每组独立 shard（Shopify 的选择）</span></td>
+            <td><span class="en">Strong: each MySQL instance is owned by a set of shops; an incident is contained</span><span class="zh">强：每个 MySQL 实例归一组 shop 所有；故障被限制在组内</span></td>
+            <td><span class="en">Higher: N MySQL instances to operate; but tooling amortizes</span><span class="zh">较高：需运维 N 个 MySQL 实例；但工具化后可摊销</span></td>
+            <td><span class="en">Millions of tenants; Shopify's reality</span><span class="zh">数百万租户；Shopify 的现实场景</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">DB-per-tenant</span><span class="zh">每租户独立 DB</span></td>
+            <td><span class="en">Maximum isolation; simplest queries</span><span class="zh">最强隔离；查询最简单</span></td>
+            <td><span class="en">Operationally impossible at millions of tenants — too many DB instances</span><span class="zh">数百万租户下运维上不可行——DB 实例太多</span></td>
+            <td><span class="en">Enterprise SaaS with handful of large clients</span><span class="zh">仅有少数大客户的企业级 SaaS</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><span class="en">Shopify cannot use DB-per-tenant at 3 M shops (that would mean millions of MySQL instances). Schema-per-tenant breaks down as schema count grows: ALTER TABLE across 3 M schemas is unworkable. Shard-per-group gives strong isolation, bounded schema count (~1,000 shards), and manageable ops — the right trade-off at Shopify's scale.</span><span class="zh">Shopify 不能在 3M 个 shop 的规模下使用每租户独立 DB（那将意味着数百万个 MySQL 实例）。每租户独立 schema 随着 schema 数量增长而崩溃：跨 3M 个 schema 执行 ALTER TABLE 根本不现实。每组独立 shard 提供强隔离、有界的 schema 数量（约 1,000 个 shard）和可管理的运维——在 Shopify 的规模下是正确的权衡。</span></p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">The shared-table temptation</span><span class="zh">共享表的诱惑</span></span>
+        <span class="en">It is tempting to add a <code>shop_id</code> column and call it done. The problem is operational: a single bad query from a large merchant can hold row-locks that stall unrelated shops on the same instance. Shard-per-group eliminates this class of cross-tenant interference at the DB layer, not just at the application layer.</span><span class="zh">加一列 <code>shop_id</code> 就完工看起来很诱人。问题在于运维层面：一个大商户的单个糟糕查询可能持有行锁，导致同实例上无关 shop 的请求全部被阻塞。每组独立 shard 在 DB 层面消除了这类跨租户干扰，而不仅仅是在应用层面。</span>
+      </div>
+
+      <h3><span class="en">② Pods — blast-radius isolation as a first-class design primitive</span><span class="zh">② Pod——爆炸半径隔离作为一等设计原语</span></h3>
+      <p><span class="en">A <strong>Pod</strong> is a self-contained failure domain: it bundles app servers, MySQL shards, Redis, and job workers for a fixed set of shops. Nothing a pod does can directly harm shops on a different pod. Key properties:</span><span class="zh"><strong>Pod</strong> 是一个自包含的故障域：它将应用服务器、MySQL shard、Redis 和任务 worker 捆绑在一起，服务于固定的一组 shop。一个 Pod 的任何行为都无法直接影响其他 Pod 上的 shop。核心属性：</span></p>
+      <ul>
+        <li><span class="en"><strong>Independent deploy and rollback</strong>: a bad code push can be rolled back for one pod without touching others. This enables canary deployments at the pod granularity.</span><span class="zh"><strong>独立部署与回滚</strong>：错误的代码推送可以只对一个 Pod 回滚，无需触动其他 Pod。这使得金丝雀发布可以以 Pod 为粒度进行。</span></li>
+        <li><span class="en"><strong>Independent scaling</strong>: a pod containing disproportionately large merchants can be scaled up (more app-server replicas, read replicas) without scaling the entire fleet.</span><span class="zh"><strong>独立扩容</strong>：包含超大商户的 Pod 可以独立扩容（增加应用服务器副本、读副本），无需扩容整个集群。</span></li>
+        <li><span class="en"><strong>Dedicated pods for whales</strong>: a merchant generating, say, 5% of platform GMV can be assigned to a dedicated single-tenant pod with its own resource limits — isolating it both from harming others and from being harmed by others.</span><span class="zh"><strong>为鲸鱼商户提供专用 Pod</strong>：一个贡献平台约 5% GMV 的商户可以被分配到专用的单租户 Pod，拥有独立的资源配额——既防止其影响他人，也防止他人影响它。</span></li>
+        <li><span class="en"><strong>Failure containment</strong>: if a MySQL primary in Pod A crashes, shops in Pod B, C, …N are completely unaffected. The blast radius is bounded to the shops in that pod.</span><span class="zh"><strong>故障限制</strong>：如果 Pod A 的 MySQL 主库崩溃，Pod B、C……N 上的 shop 完全不受影响。爆炸半径被限制在该 Pod 内的 shop 之内。</span></li>
+      </ul>
+
+      <h3><span class="en">③ Routing and the shard map — the brain that must never lie</span><span class="zh">③ 路由与 shard map——绝不能出错的大脑</span></h3>
+      <p><span class="en">Every request starts with a lookup: <code>shop_id → shard_id → pod_id</code>. The lookup path is a two-level cache:</span><span class="zh">每个请求都从一次查询开始：<code>shop_id → shard_id → pod_id</code>。查询路径是两级缓存：</span></p>
+      <ul>
+        <li><span class="en"><strong>L1 (process-local)</strong>: a bounded LRU map inside each app server process. Zero network hops for warm shops. TTL ~30–60 s.</span><span class="zh"><strong>L1（进程本地）</strong>：每个应用服务器进程内的有界 LRU map。热点 shop 零网络跳转。TTL 约 30–60 秒。</span></li>
+        <li><span class="en"><strong>L2 (edge Redis replica)</strong>: shared by all app servers in a pod. Sub-millisecond, still local to the pod's region.</span><span class="zh"><strong>L2（边缘 Redis 副本）</strong>：Pod 内所有应用服务器共享。亚毫秒级，仍在 Pod 所在区域本地。</span></li>
+        <li><span class="en"><strong>L3 (Global Shard-Map DB)</strong>: the authoritative source, queried only on cache miss or explicit invalidation. Read replicas in every region keep latency low.</span><span class="zh"><strong>L3（全局 Shard-Map DB）</strong>：权威来源，仅在缓存未命中或显式失效时查询。每个区域的读副本保持低延迟。</span></li>
+      </ul>
+      <p><span class="en">On a cache miss the lookup writes back into L1 and L2. On a shard-map flip (after a shop migration) the mover sends an explicit invalidation to L2 and lets L1 drain via TTL.</span><span class="zh">缓存未命中时，查询结果回写到 L1 和 L2。shard map 切换（shop 迁移完成后），mover 向 L2 发送显式失效通知，L1 通过 TTL 自然过期。</span></p>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Critical: stale shard map during a live migration</span><span class="zh">关键风险：实时迁移期间的 shard map 缓存陈旧</span></span>
+        <span class="en">During a shop migration there is a window where L1/L2 caches still point to the old shard while the source shard has been frozen and the new shard is live. A write that lands on the old shard after the flip is silently lost. Mitigations: (1) freeze writes to the shop on the old shard before flipping — any arriving write gets a retriable <code>503 Shop Migrating</code>; (2) the shard-map flip is a compare-and-swap that only succeeds once all caches have been explicitly invalidated; (3) the new shard is write-verified before the old shard is unfrozen. Never flip the map without draining caches first.</span><span class="zh">shop 迁移期间存在一个窗口：L1/L2 缓存仍指向旧 shard，而源 shard 已被冻结、新 shard 已上线。切换后落到旧 shard 的写入会被静默丢失。缓解措施：(1) 切换前先冻结旧 shard 上该 shop 的写入——任何到达的写入都返回可重试的 <code>503 Shop Migrating</code>；(2) shard map 切换是 compare-and-swap 操作，只有在所有缓存被显式失效后才会成功；(3) 在解冻旧 shard 前对新 shard 进行写入验证。切换 map 前务必先排空缓存。</span>
+      </div>
+
+      <h3><span class="en">④ Online shop migration — zero-downtime move between shards</span><span class="zh">④ 在线 shop 迁移——零停机跨 shard 迁移</span></h3>
+      <p><span class="en">Moving a shop between shards is the most complex operational task in this architecture. The constraint: the shop must remain available for reads and writes throughout. The ordered phases:</span><span class="zh">在 shard 之间迁移 shop 是该架构中最复杂的运维任务。约束：整个迁移过程中 shop 必须持续对读写可用。有序阶段如下：</span></p>
+      <pre><code><span class="c">-- Phase 1: Snapshot</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> orders, products, customers, … <span class="k">WHERE</span> shop_id = <span class="n">X</span>
+<span class="c">-- Dump snapshot into target shard. Can take minutes for large shops.</span>
+<span class="c">-- Source shard still serves reads AND writes during this phase.</span>
+
+<span class="c">-- Phase 2: Change-log replay (tail replication)</span>
+<span class="c">-- Subscribe to MySQL binlog on source shard, filtered to shop_id=X.</span>
+<span class="c">-- Apply all changes written during and after snapshot to target shard.</span>
+<span class="c">-- Continue until replication lag < threshold (e.g. &lt; 500 ms).</span>
+
+<span class="c">-- Phase 3: Freeze writes (brief, targeted)</span>
+<span class="k">UPDATE</span> shop_shard_map <span class="k">SET</span> status = <span class="s">'frozen'</span> <span class="k">WHERE</span> shop_id = <span class="n">X</span>
+<span class="c">-- New writes for this shop get HTTP 503 (retry-after: 2s).</span>
+<span class="c">-- Drain remaining binlog delta (usually &lt; 1 s of changes).</span>
+
+<span class="c">-- Phase 4: Verify consistency</span>
+<span class="c">-- Checksum row count + max(updated_at) on source vs target.</span>
+<span class="c">-- Must match before proceeding.</span>
+
+<span class="c">-- Phase 5: Atomic shard-map flip</span>
+<span class="k">UPDATE</span> shop_shard_map
+  <span class="k">SET</span> shard_id = <span class="n">new_shard</span>, pod_id = <span class="n">new_pod</span>, status = <span class="s">'active'</span>
+  <span class="k">WHERE</span> shop_id = <span class="n">X</span> <span class="k">AND</span> status = <span class="s">'frozen'</span>  <span class="c">-- CAS</span>
+<span class="c">-- Invalidate L2 cache entry; L1 drains via TTL.</span>
+<span class="c">-- New requests now route to target shard. Writes resume.</span>
+
+<span class="c">-- Phase 6: Cleanup</span>
+<span class="c">-- After 24 h (L1 TTL elapsed + safety window), delete source data.</span></code></pre>
+      <p><span class="en">The shop is unavailable for writes only during the freeze window (Phase 3–5), typically under 2 seconds for well-tailed replication. Reads from the old shard are still served via cached routes during this window; they see no stale data because writes are frozen.</span><span class="zh">shop 对写入不可用的时间仅限于冻结窗口（阶段 3–5），在复制追尾良好的情况下通常不超过 2 秒。此窗口内，旧 shard 的读取仍通过缓存路由提供服务；由于写入已冻结，读取不会看到陈旧数据。</span></p>
+
+      <h3><span class="en">⑤ Noisy-neighbor protection and cross-shard queries</span><span class="zh">⑤ 扰邻保护与跨 shard 查询</span></h3>
+      <p><span class="en"><strong>Noisy-neighbor protection:</strong> Even within a shard, one large shop can consume a disproportionate share of MySQL connection slots or Redis memory. Defenses:</span><span class="zh"><strong>扰邻保护：</strong>即便在同一个 shard 内，一个大 shop 也可能消耗不成比例的 MySQL 连接槽或 Redis 内存。防御手段：</span></p>
+      <ul>
+        <li><span class="en"><strong>Per-shop rate limits</strong> at the app layer: each shop is allocated a request budget (e.g. 10k API calls/min for Shopify Plus); excess is throttled before touching the DB.</span><span class="zh"><strong>应用层每 shop 速率限制</strong>：每个 shop 分配请求配额（如 Shopify Plus 每分钟 10k API 调用）；超出部分在触达 DB 之前就被限流。</span></li>
+        <li><span class="en"><strong>Connection pooling with per-shop caps</strong>: a PgBouncer/ProxySQL layer limits how many simultaneous DB connections any single shop can hold.</span><span class="zh"><strong>带每 shop 上限的连接池</strong>：PgBouncer/ProxySQL 层限制单个 shop 可持有的最大并发 DB 连接数。</span></li>
+        <li><span class="en"><strong>Hot-shop isolation</strong>: if a shop's metrics exceed a threshold (CPU, row-locks, slow queries), the shop mover can relocate it to a dedicated pod or a less-loaded shard in minutes.</span><span class="zh"><strong>热 shop 隔离</strong>：若某 shop 的指标超过阈值（CPU、行锁、慢查询），shop mover 可在几分钟内将其迁移到专用 Pod 或负载较低的 shard。</span></li>
+      </ul>
+      <p><span class="en"><strong>Cross-shard queries:</strong> Admin dashboards and analytics require data from all shops — but scatter-gathering thousands of live MySQL shards is dangerous (one slow shard stalls the whole query; no isolation). The solution is a derived store:</span><span class="zh"><strong>跨 shard 查询：</strong>管理仪表板和分析需要来自所有 shop 的数据——但对数千个实时 MySQL shard 进行散射收集是危险的（一个慢 shard 会阻塞整个查询；缺乏隔离）。解决方案是派生存储：</span></p>
+      <ul>
+        <li><span class="en">Debezium or a custom CDC connector tails the binlog of every shard and publishes events to Kafka.</span><span class="zh">Debezium 或自定义 CDC 连接器追踪每个 shard 的 binlog，并将事件发布到 Kafka。</span></li>
+        <li><span class="en">A consumer writes into a columnar store (ClickHouse, BigQuery, Snowflake) partitioned by <code>shop_id</code>.</span><span class="zh">消费者将数据写入以 <code>shop_id</code> 分区的列式存储（ClickHouse、BigQuery、Snowflake）。</span></li>
+        <li><span class="en">All cross-shop queries run against the columnar store — eventually consistent but isolated from the transactional path.</span><span class="zh">所有跨 shop 查询都针对列式存储执行——最终一致，但与事务路径完全隔离。</span></li>
+        <li><span class="en">For admin support tools that need near-real-time data (e.g. <em>"why did this order fail?"</em>), the shop-scoped lookup goes directly to the correct pod — no scatter needed.</span><span class="zh">对于需要准实时数据的管理支持工具（如<em>"为什么这笔订单失败了？"</em>），shop 范围内的查询直接路由到正确的 Pod——无需散射收集。</span></li>
+      </ul>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Giant-merchant skew</span><span class="zh">巨型商户的流量倾斜</span></span>
+        <span class="en">A whale merchant (say, a Flash Sale merchant doing 5% of platform volume) will overwhelm any shared shard. Three escalating options: (1) move the shop to a lightly loaded shard; (2) give the shop a shard with no other tenants (but still inside a shared pod); (3) give the shop a fully dedicated pod with its own resources, deploy cadence, and SLA. Option 3 is "Shopify Plus on dedicated infrastructure" — a product upsell, not just an ops trick.</span><span class="zh">一个鲸鱼商户（如大促商户占平台 5% 的交易量）会压垮任何共享 shard。三个递进选项：(1) 将 shop 迁移到负载较轻的 shard；(2) 给 shop 一个没有其他租户的专属 shard（但仍在共享 Pod 内）；(3) 给 shop 一个完全专用的 Pod，拥有独立资源、发布节奏和 SLA。选项 3 就是"Shopify Plus 专用基础设施"——是产品升级，不只是运维手段。</span>
+      </div>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">需要讨论的权衡</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Tenancy model</span><span class="zh">租户模型</span></td>
+            <td><span class="en">Shared-table (<code>shop_id</code> column) — simplest, cheapest, one cluster</span><span class="zh">共享表（<code>shop_id</code> 列）——最简单、最便宜，一个集群</span></td>
+            <td><span class="en">Shard-per-group (Shopify's choice) — strong isolation, bounded ops overhead</span><span class="zh">每组独立 shard（Shopify 的选择）——强隔离，运维开销有界</span></td>
+            <td><span class="en"><strong>Shard-per-group</strong> at Shopify scale; shared-table only viable at &lt;10k tenants</span><span class="zh"><strong>每组独立 shard</strong>（Shopify 规模）；共享表仅适用于 &lt;10k 租户</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Shard key choice</span><span class="zh">Shard key 选择</span></td>
+            <td><span class="en"><code>shop_id</code> — perfect locality; all data for one shop on one shard</span><span class="zh"><code>shop_id</code>——完美数据局部性；一个 shop 的所有数据在同一 shard</span></td>
+            <td><span class="en">Other keys (customer_id, order_id) — better distribution, cross-shard joins for most queries</span><span class="zh">其他键（customer_id、order_id）——分布更均匀，但大多数查询需要跨 shard join</span></td>
+            <td><span class="en"><strong><code>shop_id</code></strong> — Shopify's traffic is shop-scoped; locality wins decisively; skew handled by whale isolation</span><span class="zh"><strong><code>shop_id</code></strong>——Shopify 的流量以 shop 为范围；局部性优势压倒一切；倾斜通过鲸鱼商户隔离处理</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Shard routing strategy</span><span class="zh">Shard 路由策略</span></td>
+            <td><span class="en">Central lookup table (flexible, movable, requires HA lookup service)</span><span class="zh">中心查询表（灵活可迁移，需要高可用查询服务）</span></td>
+            <td><span class="en">Consistent hashing (no lookup, hard to rebalance, difficult to move one shop)</span><span class="zh">一致性哈希（无需查询，但难以再平衡，难以迁移单个 shop）</span></td>
+            <td><span class="en"><strong>Lookup table</strong>; the ability to move individual shops between shards is non-negotiable for ops</span><span class="zh"><strong>查询表</strong>；能够单独迁移 shop 是运维上不可妥协的能力</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Isolation granularity</span><span class="zh">隔离粒度</span></td>
+            <td><span class="en">Pods (isolation at cluster level, fewer units to manage)</span><span class="zh">Pod（集群级别隔离，管理单元更少）</span></td>
+            <td><span class="en">One giant shared cluster (simpler infra, no blast-radius containment)</span><span class="zh">单个大型共享集群（基础设施更简单，但无爆炸半径限制）</span></td>
+            <td><span class="en"><strong>Pods</strong>; blast-radius containment is a hard requirement at Shopify's SLA; a single cluster is a single point of failure</span><span class="zh"><strong>Pod</strong>；爆炸半径限制是 Shopify SLA 的硬性要求；单集群是单点故障</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Shop migration mechanism</span><span class="zh">Shop 迁移机制</span></td>
+            <td><span class="en">Logical replication (binlog tail) — online, low-downtime freeze window</span><span class="zh">逻辑复制（binlog 追尾）——在线，冻结窗口极短</span></td>
+            <td><span class="en">Synchronous dual-write (app writes to both source and target during move) — complex, double the write cost</span><span class="zh">同步双写（迁移期间应用同时写源和目标）——复杂，写入成本翻倍</span></td>
+            <td><span class="en"><strong>Logical replication</strong>; dual-write at app layer multiplies bugs and increases write latency; binlog tail is simpler and battle-tested</span><span class="zh"><strong>逻辑复制</strong>；应用层双写成倍放大 bug 风险并增加写延迟；binlog 追尾更简单且经过实战检验</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Cross-shop data access</span><span class="zh">跨 shop 数据访问</span></td>
+            <td><span class="en">Live scatter-gather across all shards (real-time, dangerous, no blast isolation)</span><span class="zh">对所有 shard 实时散射收集（实时，危险，无爆炸隔离）</span></td>
+            <td><span class="en">CDC to derived columnar store (eventually consistent, fully isolated)</span><span class="zh">CDC 推送到派生列式存储（最终一致，完全隔离）</span></td>
+            <td><span class="en"><strong>Derived store</strong>; scatter-gather must never be on the hot path; one slow shard blocks all</span><span class="zh"><strong>派生存储</strong>；散射收集绝不能在热路径上；一个慢 shard 会阻塞所有查询</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问题目</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">A single giant merchant outgrows one shard — what do you do?</span><span class="zh">单个超大商户超出了一个 shard 的容量——怎么办？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three escalating options: (1) move the shop to a lightly loaded shard with no other tenants (still shared MySQL instance, but effectively dedicated). (2) If a single MySQL instance is the bottleneck: split the shop's data vertically — move some tables (e.g. analytics, historical orders) to a separate read-optimized store while keeping the transactional tables on the primary shard. (3) If write throughput is the limit: give the shop a <strong>dedicated pod</strong> with its own MySQL primary that can be sized independently. This is the "Shopify Plus dedicated infrastructure" tier. The key insight: the shard-map abstraction makes any of these moves possible without changing application code — only the routing entry changes.</span><span class="zh">三个递进选项：(1) 将 shop 迁移到没有其他租户的轻负载 shard（仍是共享 MySQL 实例，但实际上专用）。(2) 若单个 MySQL 实例成为瓶颈：对 shop 的数据进行垂直拆分——将部分表（如分析表、历史订单）移至独立的读优化存储，同时保留事务表在主 shard 上。(3) 若写吞吐量是限制：给 shop 分配一个<strong>专用 Pod</strong>，拥有可独立调整规格的 MySQL 主库。这是"Shopify Plus 专用基础设施"层级。关键洞察：shard map 抽象让上述任何一种迁移都无需修改应用代码——只需更改路由条目。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A pod becomes hot — how do you rebalance without downtime?</span><span class="zh">某个 Pod 过热——如何不停机地进行再平衡？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The shard-map lookup is the rebalancing lever. To drain a hot pod: (1) identify which shops on the pod are generating disproportionate load (per-shop metrics); (2) use the Online Shop Mover to migrate those shops to a less-loaded pod or a new pod — one shop at a time, each with a sub-2-second freeze window; (3) update the shard map after each move. The pod's load drops incrementally as shops move out. You can also add a new pod and immediately start routing new shop onboarding to it (future capacity), independent of rebalancing. At no point is there a bulk migration that touches all shops simultaneously.</span><span class="zh">shard map 查询是再平衡的杠杆。排空热 Pod 的步骤：(1) 通过每 shop 的指标找出产生不成比例负载的 shop；(2) 使用 Online Shop Mover 逐一将这些 shop 迁移到负载较低或新建的 Pod——每次迁移冻结窗口不超过 2 秒；(3) 每次迁移后更新 shard map。随着 shop 不断迁出，Pod 负载逐步降低。也可以新增 Pod 并立即将新 shop 上线路由到那里（预留未来容量），独立于再平衡工作。整个过程中不会出现同时迁移所有 shop 的大规模操作。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you run schema migrations safely across thousands of shards?</span><span class="zh">如何在数千个 shard 上安全地执行 schema 迁移？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three-phase online DDL: (1) add the column as nullable with no default — this is a metadata-only change in MySQL 8 (instant algorithm); (2) backfill the column value in background batches, touching only a few thousand rows per iteration with short sleeps between batches to avoid locking; (3) add the NOT NULL constraint and default once backfill is complete. Use <strong>pt-online-schema-change</strong> or <strong>gh-ost</strong> (GitHub's online schema change tool) per shard — they shadow-copy rows without holding long locks. Rollout strategy: run the migration on one pod's shards, verify, then proceed pod-by-pod. Application code must be backward-compatible with both old and new schema during the rollout window (expand/contract pattern).</span><span class="zh">三阶段在线 DDL：(1) 将列添加为 nullable 且无 DEFAULT——这在 MySQL 8 中是纯元数据变更（instant 算法）；(2) 在后台以小批量回填列值，每次迭代只处理几千行，批次间加短暂 sleep 避免锁；(3) 回填完成后再添加 NOT NULL 约束和默认值。在每个 shard 上使用 <strong>pt-online-schema-change</strong> 或 <strong>gh-ost</strong>（GitHub 的在线 schema 变更工具）——它们通过影子行复制，不持长锁。发布策略：先在一个 Pod 的所有 shard 上运行迁移，验证后再逐 Pod 推进。整个发布窗口内，应用代码必须向后兼容新旧两种 schema（扩展/收缩模式）。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">GDPR: how do you ensure a shop's data never leaves its required region?</span><span class="zh">GDPR：如何确保 shop 的数据永远不会离开其所要求的区域？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The <code>region</code> field in <code>shop_shard_map</code> is the enforcement point. At onboarding, the merchant selects a data-residency region; the shard-map assignment engine only assigns the shop to a shard inside a pod in that region. The routing layer enforces that requests for a GDPR-pinned shop are never forwarded to a pod outside the required region — if the nearest pod is in a different region, the request is rejected with a 422. The Online Shop Mover is also region-aware: it refuses to move a GDPR-pinned shop to a target pod outside the allowed region. The global shard-map DB itself stores only metadata (not merchant data), so its geo-replication does not violate residency requirements.</span><span class="zh"><code>shop_shard_map</code> 中的 <code>region</code> 字段是执行点。上线时，商户选择数据驻留区域；shard map 分配引擎只会将该 shop 分配到目标区域内 Pod 的 shard。路由层强制要求：GDPR 锁定的 shop 的请求永远不会被转发到所要求区域之外的 Pod——若最近的 Pod 位于不同区域，请求以 422 被拒绝。Online Shop Mover 同样具备区域感知能力：它拒绝将 GDPR 锁定的 shop 迁移到允许区域之外的目标 Pod。全局 shard map DB 本身只存储元数据（非商户数据），因此其地理复制不违反数据驻留要求。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">The shard-map lookup service itself fails — what is the fallback?</span><span class="zh">Shard-map 查询服务本身故障——降级方案是什么？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The lookup service has four layers of resilience: (1) <strong>L1 process-local cache</strong> in app servers — the shard map for recently-seen shops is held in memory with a 30–60 s TTL. If the lookup service goes down, existing app-server instances can continue routing warm shops for the TTL duration without any lookup. (2) <strong>L2 Redis replica</strong> — even if the primary lookup service is unreachable, the Redis replica is independently available. (3) <strong>Read replicas of the global shard-map DB</strong> in every region — app servers can fall back to a direct DB read. (4) <strong>Static snapshot fallback</strong> — a periodic snapshot of the shard map can be embedded in app-server configuration (refreshed every few minutes) as a last-resort stale-but-safe fallback. Writes to the shard map (new onboardings, map flips) are queued during an outage and replayed on recovery. The key property: an outage of the lookup service degrades to slightly stale routing, not to a total outage of the platform.</span><span class="zh">查询服务有四层弹性保障：(1) 应用服务器中的 <strong>L1 进程本地缓存</strong>——最近访问过的 shop 的 shard map 以 30–60 秒 TTL 保存在内存中。若查询服务宕机，现有应用服务器实例在 TTL 期间无需任何查询即可继续路由热点 shop。(2) <strong>L2 Redis 副本</strong>——即使主查询服务不可达，Redis 副本仍独立可用。(3) 每个区域的<strong>全局 shard-map DB 读副本</strong>——应用服务器可降级为直接读 DB。(4) <strong>静态快照降级</strong>——定期生成的 shard map 快照可嵌入应用服务器配置（每几分钟刷新一次），作为最后兜底的陈旧但安全的降级方案。故障期间对 shard map 的写入（新 shop 上线、map 切换）被排队，恢复后重放。关键特性：查询服务故障只会降级为略微陈旧的路由，而非平台整体中断。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you build a cross-shop report without scatter-gathering live shards?</span><span class="zh">如何在不对实时 shard 散射收集的情况下构建跨 shop 报表？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Never scatter-gather the live MySQL shards for reporting — one slow shard or pod incident would stall the entire report and create a dependency between analytical and transactional workloads. Instead: a CDC pipeline (Debezium reading each shard's binlog → Kafka topics → a consumer writing into ClickHouse or BigQuery) continuously materializes a replicated, shop-partitioned copy of transactional data into a columnar store. Cross-shop reports query the columnar store, which supports full-table scans efficiently and is completely isolated from the transactional pods. Latency is typically 1–5 minutes behind real-time (acceptable for all reporting use-cases). For near-real-time admin lookups that must be current (e.g., support tool for a live incident), route directly to the specific shop's pod using the shard map — a single-shop query, not a cross-shard scan.</span><span class="zh">永远不要对实时 MySQL shard 进行散射收集来生成报表——一个慢 shard 或 Pod 故障会阻塞整个报表，并在分析与事务工作负载之间制造依赖。替代方案：CDC 管道（Debezium 读取每个 shard 的 binlog → Kafka topic → 消费者写入 ClickHouse 或 BigQuery）持续将事务数据物化为按 shop 分区的列式存储副本。跨 shop 报表查询列式存储——全表扫描高效，且与事务 Pod 完全隔离。延迟通常比实时晚 1–5 分钟（对所有报表场景均可接受）。对于必须实时的管理查询（如支持工具处理线上故障），通过 shard map 直接路由到目标 shop 的 Pod——这是单 shop 查询，不是跨 shard 扫描。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do schema migrations roll out safely across ~1,000 shards?</span><span class="zh">Schema 迁移如何安全地在约 1,000 个 shard 上滚动发布？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Use the <strong>expand/contract pattern</strong> combined with an online schema-change tool such as <strong>gh-ost</strong>. In the expand phase, add the new column as nullable (no DEFAULT) — in MySQL 8 this is an instant metadata-only operation that acquires no row locks. Then backfill the column in small batches (a few thousand rows per iteration with brief sleeps) so the migration never holds a long lock. Only after the backfill completes do you add the NOT NULL constraint in the contract phase. Roll out pod-by-pod: run the migration on Pod A's shards first, verify application health, then proceed to the next pod. Application code must be backward-compatible with both old and new schemas during the rollout window. Monitor replication lag on each shard during the migration — if lag spikes, pause the backfill until it recovers.</span><span class="zh">使用<strong>扩展/收缩模式（expand/contract）</strong>结合在线 Schema 变更工具（如 <strong>gh-ost</strong>）。扩展阶段：将新列添加为 nullable、不设 DEFAULT——MySQL 8 下这是纯元数据操作，不持行锁。然后以小批量（每次几千行，批次间加短暂 sleep）回填数据，避免长锁。待回填完成后，再通过收缩阶段添加 NOT NULL 约束。按 Pod 逐步推进：先对 Pod A 的所有 shard 执行迁移，验证应用健康后再滚动到下一个 Pod。在整个发布窗口内，应用代码必须向后兼容新旧两种 Schema。迁移期间持续监控每个 shard 的复制延迟——若延迟飙升则暂停回填，等待恢复。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A pod gets hot — how do you rebalance online without downtime?</span><span class="zh">某个 Pod 过热——如何在不停机的情况下在线再平衡？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Use per-shop metrics (CPU, slow queries, connection usage) to identify the heaviest tenants on the hot pod. Then invoke the <strong>Online Shop Mover</strong> to migrate those shops one at a time to a less-loaded pod or a freshly provisioned pod. Each individual move has a write-freeze window of under 2 seconds; the mover updates the shard map atomically after each move. Pod load drops incrementally as shops drain out — no big-bang migration. You can also pre-provision a new pod and start routing all new shop onboardings to it immediately, relieving future pressure independently of the rebalance effort. At no point do you need to pause all shops on the pod simultaneously.</span><span class="zh">利用每个 shop 的指标（CPU、慢查询、连接数）找出热 Pod 上负载最重的租户。随后调用 <strong>Online Shop Mover</strong>，逐一将这些 shop 迁移到负载较低的 Pod 或新预置的 Pod。每次单个 shop 迁移的写入冻结窗口不超过 2 秒；迁移完成后 Mover 以原子方式更新 shard map。随着 shop 不断迁出，Pod 负载逐步下降——无需一次性大规模迁移。也可以提前预置新 Pod，立即将所有新 shop 上线路由至该 Pod，独立于再平衡工作缓解未来压力。整个过程中无需同时暂停该 Pod 上的所有 shop。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A shop must stay in the EU (GDPR) — how is residency enforced end to end?</span><span class="zh">某个 shop 必须留在欧盟（GDPR）——数据驻留如何做到端到端强制执行？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Residency enforcement has three layers. First, the <strong>shard-map assignment engine</strong> pins the shop to a pod inside the required region at onboarding time — the <code>region</code> field in <code>shop_shard_map</code> is the authoritative record. Second, the <strong>edge router</strong> reads this field on every request: if the nearest edge PoP is outside the required region, the request is redirected or served from within the required region rather than being forwarded cross-region. Third, the <strong>Online Shop Mover</strong> is region-aware and refuses to move a GDPR-pinned shop to a target pod outside the allowed region, preventing accidental residency violations during rebalancing. The global shard-map DB stores only routing metadata (not merchant data), so its worldwide replication does not itself violate GDPR. Any attempt to write to the wrong region is rejected at the routing layer before it reaches a shard.</span><span class="zh">数据驻留强制执行分三层。第一，<strong>shard map 分配引擎</strong>在 shop 上线时就将其锁定到目标区域内的 Pod——<code>shop_shard_map</code> 中的 <code>region</code> 字段是权威记录。第二，<strong>边缘路由器</strong>在每次请求时读取该字段：若最近的边缘 PoP 位于要求区域之外，则将请求重定向或在要求区域内提供服务，而非跨区域转发。第三，<strong>Online Shop Mover</strong> 具备区域感知能力，拒绝将 GDPR 锁定的 shop 迁移到允许区域之外的目标 Pod，从而防止再平衡过程中意外违反数据驻留要求。全局 shard map 数据库仅存储路由元数据（不含商户数据），因此其全球复制本身不违反 GDPR。任何试图写入错误区域的请求都会在路由层被拒绝，永远不会到达 shard。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">One shop exhausts the DB connection pool — how do you cap per-shop connections?</span><span class="zh">某个 shop 耗尽了数据库连接池——如何对单个 shop 的连接数设置上限？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Enforce per-shop connection quotas at the <strong>connection-proxy layer</strong> (ProxySQL or a custom middleware) sitting between the app servers and MySQL. Each shop is allocated a maximum concurrency budget — for example, a standard shop might be capped at 20 simultaneous DB connections, while a Shopify Plus merchant gets a higher limit. Requests that exceed the shop's quota are queued with a short timeout and returned as a retriable <code>429 Too Many Requests</code> to the app layer; they never reach MySQL. This prevents a single shop from starving the entire shard of connections. Complement this with per-shop rate limiting at the application layer (before requests touch the DB) and fair scheduling so that large shops cannot indefinitely delay small shops in the queue. If a shop persistently saturates its quota, it is a signal to move it to a dedicated pod with a larger connection pool.</span><span class="zh">在应用服务器和 MySQL 之间的<strong>连接代理层</strong>（ProxySQL 或自定义中间件）强制执行每 shop 的连接配额。每个 shop 分配最大并发预算——例如，标准 shop 上限为 20 个并发 DB 连接，Shopify Plus 商户可设置更高上限。超出配额的请求在代理层排队，超时后以可重试的 <code>429 Too Many Requests</code> 返回给应用层，永远不会触达 MySQL。这样可防止单个 shop 耗尽整个 shard 的连接资源。同时在应用层（请求触达 DB 之前）配合每 shop 速率限制和公平调度，确保大 shop 无法无限延迟小 shop 的排队请求。若某个 shop 持续打满配额，则视为将其迁移到具有更大连接池的专用 Pod 的信号。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How does a developer run a cross-shop analytical query safely?</span><span class="zh">开发者如何安全地执行跨 shop 的分析查询？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The rule is absolute: <strong>never scatter-gather live MySQL shards</strong> in the hot transactional path. Cross-shop analytical queries go exclusively against the <strong>CDC-fed columnar store</strong> (e.g., ClickHouse or BigQuery). A CDC pipeline (Debezium reading each shard's binlog → Kafka topics → columnar consumer) continuously replicates transactional data into the analytics store with typical lag of 1–5 minutes. Developers query this store using standard SQL; full-table scans across all shops are cheap on columnar storage and completely isolated from the transactional pods. For shop-scoped near-real-time admin lookups ("why did this order fail?"), the developer routes directly to the specific shop's pod via the shard map — this is a single-shard, single-shop query, not a cross-shard scan, and is safe on the hot path. Any tooling that bypasses these two patterns (live scatter-gather) requires explicit approval and must run during off-peak hours with strict query timeouts.</span><span class="zh">规则绝对明确：<strong>绝不在热事务路径上对实时 MySQL shard 进行散射收集（scatter-gather）</strong>。所有跨 shop 的分析查询只能针对 <strong>CDC 驱动的列式存储</strong>（如 ClickHouse 或 BigQuery）。CDC 管道（Debezium 读取每个 shard 的 binlog → Kafka topic → 列式消费者）持续将事务数据复制到分析存储，典型延迟为 1–5 分钟。开发者使用标准 SQL 查询该存储；在列式存储上跨所有 shop 的全表扫描成本低廉，且与事务 Pod 完全隔离。对于需要接近实时的 shop 级管理查询（"为什么这笔订单失败了？"），开发者通过 shard map 直接路由到目标 shop 的 Pod——这是单 shard、单 shop 的查询，不是跨 shard 扫描，在热路径上是安全的。任何绕过上述两种模式（即实时散射收集）的工具都需要明确审批，并且必须在非高峰时段运行，同时设置严格的查询超时。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A whole pod's primary DB is lost — what is the blast radius and how do you recover?</span><span class="zh">某个 Pod 的主数据库完全丢失——影响范围是什么？如何恢复？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The blast radius is strictly bounded to the shops assigned to that pod — typically 1–5% of all shops depending on pod count, while all other pods continue serving normally. Recovery proceeds in three ordered steps: (1) <strong>Replica failover</strong> — a synchronous or semi-synchronous replica is promoted to primary within seconds (using MySQL Group Replication or an orchestrator like Orchestrator/Vitess). The shard map is unchanged; app servers automatically connect to the new primary via the proxy layer. (2) <strong>PITR from backups</strong> — if the replica is also unavailable or inconsistent, restore the shard from the most recent snapshot and replay the binary log up to the last committed transaction (Point-in-Time Recovery). (3) <strong>Shard-map status update</strong> — the pod is marked as <code>degraded</code> in the shard map so that health-check dashboards surface it and the SRE on-call is alerted. Shops remain offline only during the failover window (typically under 30 seconds for replica promotion). Once the primary is restored, the shop-mover can optionally redistribute shops from the recovered pod to balance capacity.</span><span class="zh">影响范围严格限定于分配给该 Pod 的 shop——通常占全部 shop 的 1–5%（视 Pod 总数而定），其他所有 Pod 继续正常服务。恢复按三个有序步骤进行：(1) <strong>副本故障转移</strong>——同步或半同步副本在数秒内提升为主库（使用 MySQL Group Replication 或 Orchestrator/Vitess 等编排工具）。shard map 无需改变；应用服务器通过代理层自动连接到新主库。(2) <strong>从备份进行 PITR</strong>——若副本也不可用或数据不一致，则从最近的快照恢复 shard，并重放 binlog 直至最后一个已提交事务（时间点恢复）。(3) <strong>更新 shard map 状态</strong>——在 shard map 中将该 Pod 标记为 <code>degraded</code>，使健康检查仪表板显示异常并告警值班 SRE。shop 仅在故障转移窗口内（副本提升通常不超过 30 秒）保持不可用。主库恢复后，shop mover 可选择性地将 shop 从恢复的 Pod 重新分配以平衡容量。</span></p>
+          </div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these five things</span><span class="zh">Staff 级总结——说出这五点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Shard by <code>shop_id</code></strong>, group shards into self-contained Pods — each Pod is an independent failure domain for blast-radius containment; a pod crash or bad deploy affects only its shops.</span><span class="zh"><strong>以 <code>shop_id</code> 分片</strong>，将 shard 组织成自包含的 Pod——每个 Pod 是独立的故障域，用于限制爆炸半径；Pod 崩溃或错误发布只影响其内的 shop。</span></li>
+          <li><span class="en"><strong>Routing brain = HA edge-cached shard map</strong>: every request resolves <code>shop_id → shard → pod</code> from an edge-local cache; the global shard-map DB is the source of truth, queried only on cache miss.</span><span class="zh"><strong>路由核心 = 高可用边缘缓存 shard map</strong>：每个请求从边缘本地缓存解析 <code>shop_id → shard → pod</code>；全局 shard-map DB 是权威来源，仅在缓存未命中时查询。</span></li>
+          <li><span class="en"><strong>Online shop move = snapshot + binlog-tail + freeze + verify + atomic flip</strong>: the freeze window is under 2 seconds; this is what makes rebalancing, GDPR pinning, and whale isolation operationally practical.</span><span class="zh"><strong>在线 shop 迁移 = 快照 + binlog 追尾 + 冻结 + 验证 + 原子切换</strong>：冻结窗口不超过 2 秒；正是这一机制使得再平衡、GDPR 锁定和鲸鱼商户隔离在运维上切实可行。</span></li>
+          <li><span class="en"><strong>Noisy-neighbor protection</strong> = per-shop rate limits + connection-pool caps at app layer; for true whales, escalate to a dedicated pod with independent resource limits and deploy cadence.</span><span class="zh"><strong>扰邻保护</strong> = 应用层每 shop 速率限制 + 连接池上限；对于真正的鲸鱼商户，升级到拥有独立资源限制和发布节奏的专用 Pod。</span></li>
+          <li><span class="en"><strong>Keep the hot path single-shard</strong>: all transactional queries are shop-scoped and touch exactly one shard. Push cross-tenant work — analytics, admin reports — to a CDC-fed derived store that is fully isolated from the transactional pods.</span><span class="zh"><strong>保持热路径单 shard</strong>：所有事务查询以 shop 为范围，只触达一个 shard。将跨租户工作——分析、管理报表——推送到 CDC 驱动的派生存储，与事务 Pod 完全隔离。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (multi-tenant architecture, sharding patterns)</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview guide</a></li>
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">Interview Query — Shopify Software Engineer interview guide</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="03_checkout_payments.html">← 03 · Checkout &amp; Payments</a> &nbsp;·&nbsp; <a href="05_shopping_cart.html">Next: 05 · Shopping Cart →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

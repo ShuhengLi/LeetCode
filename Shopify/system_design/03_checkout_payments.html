@@ -1,0 +1,1129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · Checkout &amp; Payments — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 03 · Checkout &amp; Pay</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">This question</span><span class="zh">本题</span></h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4><span class="en">Navigate</span><span class="zh">导航</span></h4>
+    <a href="02_inventory_management.html"><span class="n">←</span> 02 Inventory</a>
+    <a href="04_multi_tenant_sharding.html"><span class="n">→</span> 04 Multi-tenant</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 1 · Signature · ★★★★★</div>
+      <h1><span class="en">Design a Multi-Region Checkout &amp; Payment Processing System</span><span class="zh">设计多地域结账与支付处理系统</span></h1>
+      <p><span class="en">A buyer clicks <strong>Pay</strong>. The system must <strong>never double-charge</strong>, must survive a PSP outage,
+      must work across regions, and must not lose the order even if any single component fails mid-flight.
+      Every failed or duplicated charge is a lost merchant sale or a furious customer.</span><span class="zh">买家点击<strong>支付</strong>。系统必须<strong>永不重复扣款</strong>，必须在 PSP 故障时存活，必须跨地域正常运行，且在任意单一组件中途故障时都不能丢失订单。每一次失败或重复的扣款，都意味着商家损失一笔销售，或买家怒不可遏。</span></p>
+      <div class="meta">
+        <span class="chip">💳 PSP resilience + idempotency</span>
+        <span class="chip">🔒 PCI scope + tokenization</span>
+        <span class="chip">⏱ 60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why Shopify loves this one</span><span class="zh">为什么 Shopify 钟爱这道题</span></span>
+      <span class="en">Checkout is the revenue-critical path for every merchant. It combines <strong>distributed transactions</strong>
+      (inventory + payment + order in one saga), <strong>external dependency failures</strong> (PSPs are slow and flaky),
+      <strong>no double-charge — idempotent retries</strong> (true exactly-once is impossible across an external gateway), and <strong>PCI compliance</strong> (minimize scope).
+      Getting it right requires a staff engineer's breadth: idempotency, state machines, outbox, and circuit breakers all at once.</span>
+      <span class="zh">结账是每位商家的核心营收链路。它融合了<strong>分布式事务</strong>（库存 + 支付 + 订单合并为一个 saga）、<strong>外部依赖故障</strong>（PSP 既慢又不稳定）、<strong>禁止重复扣款——幂等重试</strong>（跨外部网关的真正 exactly-once 不可能实现），以及 <strong>PCI 合规</strong>（最小化范围）。做对这道题需要 Staff 工程师的宽度：同时处理幂等性、状态机、outbox 和断路器。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 先问清楚，别假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能需求</span></h4>
+          <ul>
+            <li><span class="en">Create a checkout session from a cart (line items, shipping address, contact).</span><span class="zh">从购物车创建结账会话（商品行、收货地址、联系方式）。</span></li>
+            <li><span class="en">Calculate shipping options and taxes; apply discounts/promo codes.</span><span class="zh">计算运费选项和税费；应用折扣/促销码。</span></li>
+            <li><span class="en"><strong>Authorize + capture payment</strong> via PSP (Shopify Payments, Stripe, PayPal, etc.).</span><span class="zh">通过 PSP（Shopify Payments、Stripe、PayPal 等）<strong>授权并扣款</strong>。</span></li>
+            <li><span class="en">Create an order as the durable source of truth on success.</span><span class="zh">成功后创建订单作为持久的事实来源。</span></li>
+            <li><span class="en">Trigger fulfillment pipeline, notifications, analytics.</span><span class="zh">触发履单流水线、通知和数据分析。</span></li>
+            <li><span class="en">Support <strong>refunds and cancellations</strong> post-order.</span><span class="zh">支持订单后的<strong>退款和取消</strong>。</span></li>
+            <li><span class="en">Handle <strong>PSP webhooks</strong> for async payment state updates.</span><span class="zh">处理 PSP webhook 以异步更新支付状态。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>No double-charge</strong> — idempotency end-to-end (client → us → PSP).</span><span class="zh"><strong>禁止重复扣款</strong>——端到端幂等性（客户端 → 我们 → PSP）。</span></li>
+            <li><span class="en"><strong>Exactly-once order creation</strong> — concurrent retries must not produce two orders.</span><span class="zh"><strong>订单精确创建一次</strong>——并发重试不得产生两个订单。</span></li>
+            <li><span class="en">High availability: checkout must survive a single-PSP outage.</span><span class="zh">高可用性：结账流程必须能在单个 PSP 故障时存活。</span></li>
+            <li><span class="en">Multi-region with <strong>data residency</strong> (EU data stays in EU).</span><span class="zh">多地域部署，具备<strong>数据驻留</strong>约束（EU 数据留在 EU）。</span></li>
+            <li><span class="en"><strong>Auditable money trail</strong> — every state transition logged, immutable.</span><span class="zh"><strong>可审计的资金轨迹</strong>——每次状态变更均需记录且不可篡改。</span></li>
+            <li><span class="en">PCI scope minimized — card data never touches Shopify servers (tokenization).</span><span class="zh">最小化 PCI 范围——卡号数据永远不经过 Shopify 服务器（token 化）。</span></li>
+            <li><span class="en">PSP round-trip is the slow dependency (~200–800 ms); everything else must be fast.</span><span class="zh">PSP 往返是唯一慢依赖（~200–800 ms）；其余一切必须快。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to actually ask out loud</span><span class="zh">面试中应该大声问出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Which PSPs are in scope — one or many? Does the system need to <strong>failover</strong> across PSPs?</span><span class="zh">涉及哪些 PSP——一个还是多个？系统是否需要跨 PSP <strong>故障转移</strong>？</span></li>
+          <li><span class="en">Synchronous capture at authorization, or <strong>auth-then-async-capture</strong> (e.g. ship-then-bill)?</span><span class="zh">授权时同步扣款，还是<strong>先授权后异步扣款</strong>（如先发货后收费）？</span></li>
+          <li><span class="en">Multi-currency? If so, does FX conversion happen here or at the PSP?</span><span class="zh">是否支持多币种？如果是，FX 转换在我们这里发生还是在 PSP 端？</span></li>
+          <li><span class="en">Guest checkout or authenticated buyers only? <em>(Affects idempotency key design.)</em></span><span class="zh">仅限已认证买家，还是也支持访客结账？<em>（影响 idempotency key 的设计。）</em></span></li>
+          <li><span class="en">Is inventory <strong>reserved before payment</strong>? If so, what's the hold TTL?</span><span class="zh">库存是否在<strong>支付前预留</strong>？如果是，预留的 TTL 是多少？</span></li>
+          <li><span class="en">Which regions? What are the data residency constraints?</span><span class="zh">部署哪些地域？数据驻留约束是什么？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找到真正的瓶颈</span></span></div>
+      <p><span class="en">The platform processes tens of millions of orders per day across all merchants.
+      At BFCM the peak-to-average ratio spikes by roughly <strong>10–20×</strong>.
+      The bottleneck is <em>not</em> our storage — it is the <strong>PSP round-trip</strong> (200–800 ms external call)
+      and <strong>idempotency-key coordination</strong> under retries.</span><span class="zh">平台每天处理数千万笔跨商家订单。在 BFCM（黑五/网一）期间，峰值与平均值之比约激增 <strong>10–20 倍</strong>。瓶颈<em>不是</em>我们的存储——而是 <strong>PSP 往返</strong>（200–800 ms 外部调用）以及重试时的<strong>幂等键协调</strong>。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">50M+</div><div class="l"><span class="en">orders/day platform-wide (all merchants)</span><span class="zh">全平台每日订单量（所有商家）</span></div></div>
+        <div class="kpi"><div class="v">~30k</div><div class="l"><span class="en">peak checkout QPS at BFCM</span><span class="zh">BFCM 峰值结账 QPS</span></div></div>
+        <div class="kpi"><div class="v">400ms</div><div class="l"><span class="en">median PSP authorization latency (P50)</span><span class="zh">PSP 授权延迟中位数（P50）</span></div></div>
+        <div class="kpi"><div class="v">~150M</div><div class="l"><span class="en">idempotency key lookups/day (3× order vol.)</span><span class="zh">每日 idempotency key 查询量（订单量的 3 倍）</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en">At 30k checkout completions/s and ~400 ms PSP latency, the PSP adapter tier needs ~12,000 concurrent connections to PSPs. This is where <strong>circuit breakers + PSP failover</strong> matter most.</span><span class="zh">在 30k 结账完成/秒、~400 ms PSP 延迟的情况下，PSP 适配层需要约 12,000 个到 PSP 的并发连接。这正是<strong>断路器 + PSP 故障转移</strong>最关键的地方。</span></li>
+        <li><span class="en">Idempotency store: 150M lookups/day ≈ ~1,750 reads/s (peak ~5k/s). A Redis cluster handles this trivially; the question is <strong>durability</strong>.</span><span class="zh">幂等存储：1.5 亿次查询/天 ≈ ~1,750 读/秒（峰值 ~5k/秒）。Redis 集群轻松应对；关键问题是<strong>持久性</strong>。</span></li>
+        <li><span class="en">Order writes: 30k/s peak. A horizontally sharded DB with per-shop sharding (see Q04) handles this comfortably at ~500 rows/s per shard.</span><span class="zh">订单写入：峰值 30k/秒。按 shop 水平分片的数据库（见 Q04）可轻松以每个分片 ~500 行/秒处理。</span></li>
+        <li><span class="en">Outbox table: same volume as orders — written in the same transaction, so no extra load.</span><span class="zh">outbox 表：与订单量相同——写在同一事务中，不产生额外负载。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct">⭐ <span class="en">Staff signal</span><span class="zh">Staff 信号</span></span>
+        <span class="en">State explicitly: <em>"The PSP is the only truly slow and unreliable component. Every design decision —
+        idempotency, circuit breakers, async capture, failover — is about safely navigating PSP latency and failures
+        without losing orders or double-charging."</em></span>
+        <span class="zh">明确说出：<em>"PSP 是唯一真正慢且不可靠的组件。所有设计决策——幂等性、断路器、异步扣款、故障转移——都是为了在不丢失订单、不重复扣款的前提下，安全地应对 PSP 的延迟与故障。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row"><span class="method post">POST</span><span class="path">/checkouts</span><span class="desc">{cartId} → {checkoutId, expiresAt} · creates session</span></div>
+        <div class="row"><span class="method put">PUT</span><span class="path">/checkouts/{id}</span><span class="desc">{shippingAddress, contact, shippingRateId} → updated checkout</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/checkouts/{id}/complete</span><span class="desc">Header: Idempotency-Key · {paymentMethodToken} → {orderId, status}</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/checkouts/{id}</span><span class="desc">poll state: PENDING | PROCESSING | COMPLETE | FAILED</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/payments/webhook</span><span class="desc">PSP callback · {pspRef, event, amount} → 200 OK</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/orders/{id}/refund</span><span class="desc">Header: Idempotency-Key · {amount, reason} → {refundId, status}</span></div>
+      </div>
+      <p><span class="en">The <code>Idempotency-Key</code> header on <code>/complete</code> and <code>/refund</code> is the primary
+      client-side guard against double-charge on network retries. The server <strong>stores the key, request hash, and final response</strong>
+      and returns the cached response on any repeat call with the same key — even if the PSP has already been charged.</span><span class="zh"><code>/complete</code> 和 <code>/refund</code> 上的 <code>Idempotency-Key</code> 请求头是防止网络重试时重复扣款的主要客户端保障。服务器<strong>存储该键、请求哈希和最终响应</strong>，对任何携带相同键的重复调用直接返回缓存响应——即使 PSP 已经完成扣款。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+
+      <h4><span class="en">Core relations (Postgres — per-region, per-shard)</span><span class="zh">核心关系表（Postgres——按地域、按分片部署）</span></h4>
+      <pre><code><span class="c">-- Checkout session (short-lived, expires in 30 min)</span>
+<span class="k">checkout_session</span>(
+  id            <span class="s">UUID PK</span>,
+  cart_id       <span class="s">UUID</span>,
+  shop_id       <span class="s">BIGINT</span>,
+  buyer_email   <span class="s">TEXT</span>,
+  totals        <span class="s">JSONB</span>,          <span class="c">-- {subtotal, tax, shipping, total, currency}</span>
+  state         <span class="s">TEXT</span>,           <span class="c">-- CREATED | PROCESSING | COMPLETE | FAILED | EXPIRED</span>
+  expires_at    <span class="s">TIMESTAMPTZ</span>
+)
+
+<span class="c">-- Order: durable source of truth. Written once; never updated in place for financial fields.</span>
+<span class="k">order</span>(
+  id                <span class="s">UUID PK</span>,
+  shop_id           <span class="s">BIGINT</span>,
+  buyer_email       <span class="s">TEXT</span>,
+  line_items        <span class="s">JSONB</span>,
+  amount            <span class="s">NUMERIC(12,2)</span>,
+  currency          <span class="s">CHAR(3)</span>,
+  state             <span class="s">TEXT</span>,          <span class="c">-- PENDING | PAID | FULFILLED | CANCELLED | REFUNDED</span>
+  idempotency_key   <span class="s">TEXT UNIQUE NOT NULL</span>  <span class="c">-- prevents duplicate orders on retry</span>
+)
+
+<span class="c">-- Payment: state machine per charge attempt. Multiple payments possible per order (refunds).</span>
+<span class="k">payment</span>(
+  id          <span class="s">UUID PK</span>,
+  order_id    <span class="s">UUID REFERENCES order</span>,
+  psp         <span class="s">TEXT</span>,              <span class="c">-- 'shopify_payments' | 'stripe' | 'paypal'</span>
+  psp_ref     <span class="s">TEXT</span>,              <span class="c">-- PSP's own charge/payment intent ID</span>
+  state       <span class="s">TEXT</span>,              <span class="c">-- INITIATED → AUTHORIZED → CAPTURED → FAILED → VOIDED → REFUNDED</span>
+  amount      <span class="s">NUMERIC(12,2)</span>,
+  currency    <span class="s">CHAR(3)</span>,
+  attempts    <span class="s">INT DEFAULT 0</span>,
+  created_at  <span class="s">TIMESTAMPTZ</span>,
+  updated_at  <span class="s">TIMESTAMPTZ</span>
+)
+
+<span class="c">-- Idempotency record: cache the full response for any mutating endpoint call.</span>
+<span class="k">idempotency_record</span>(
+  key           <span class="s">TEXT PK</span>,
+  request_hash  <span class="s">TEXT NOT NULL</span>,   <span class="c">-- SHA-256 of request body; 409 if key reused w/ diff hash</span>
+  response      <span class="s">JSONB</span>,
+  status        <span class="s">TEXT</span>,            <span class="c">-- PROCESSING | COMPLETE | FAILED</span>
+  created_at    <span class="s">TIMESTAMPTZ</span>
+)
+
+<span class="c">-- Outbox: written in same DB transaction as order; relay publishes to Kafka.</span>
+<span class="k">outbox</span>(
+  id            <span class="s">UUID PK</span>,
+  aggregate_id  <span class="s">UUID</span>,
+  aggregate_type <span class="s">TEXT</span>,           <span class="c">-- 'order' | 'payment'</span>
+  event_type    <span class="s">TEXT</span>,           <span class="c">-- 'order.created' | 'payment.captured' | 'payment.failed'</span>
+  payload       <span class="s">JSONB</span>,
+  published_at  <span class="s">TIMESTAMPTZ</span>     <span class="c">-- NULL until relay publishes; relay polls WHERE published_at IS NULL</span>
+)</code></pre>
+
+      <h4><span class="en">Payment state machine</span><span class="zh">支付状态机</span></h4>
+      <pre><code><span class="c">INITIATED</span>
+    │  PSP authorize called
+    ▼
+<span class="c">AUTHORIZED</span>   ──── PSP async webhook / polling ────►  <span class="c">FAILED</span>
+    │  capture called (sync or async)                      │
+    ▼                                                    (end)
+<span class="c">CAPTURED</span>
+    │  refund requested
+    ▼
+<span class="c">REFUNDED</span>
+
+<span class="c">AUTHORIZED</span> ──► <span class="c">VOIDED</span>   (auth expired / saga compensation)
+<span class="c">CAPTURED</span>   ──► <span class="c">REFUNDED</span> (post-fulfillment refund)</code></pre>
+
+      <h4><span class="en">Hot path (Redis)</span><span class="zh">热路径（Redis）</span></h4>
+      <pre><code><span class="n">idempotency:{key}</span>   <span class="c">// STRING, 24-hour TTL — fast lookup, backed by DB record</span>
+<span class="n">checkout:{id}:lock</span>  <span class="c">// NX key, TTL=60s — prevents concurrent /complete calls for same checkout</span>
+<span class="n">psp:circuit:{psp}</span>   <span class="c">// STRING: CLOSED | OPEN | HALF_OPEN — circuit breaker state</span></code></pre>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">request, data, and event flows drawn separately</span><span class="zh">请求流、数据流、事件流分别绘制</span></span></div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 820 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <!-- default grey arrowhead -->
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <!-- orange arrowhead for event/async flow -->
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+            <!-- blue arrowhead for PSP webhook -->
+            <marker id="ahb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#2563eb"/>
+            </marker>
+          </defs>
+
+          <!-- ===== REQUEST FLOW (grey spine, top to bottom) ===== -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <!-- buyer → edge -->
+            <line x1="340" y1="64" x2="340" y2="92"/>
+            <!-- edge → checkout svc -->
+            <line x1="340" y1="143" x2="340" y2="174"/>
+            <!-- checkout svc → idempotency store -->
+            <line x1="456" y1="200" x2="545" y2="200"/>
+            <!-- checkout svc → payment svc -->
+            <line x1="340" y1="225" x2="340" y2="258"/>
+            <!-- payment svc → PSP primary -->
+            <line x1="275" y1="300" x2="205" y2="330"/>
+            <!-- payment svc → PSP secondary (dashed, failover) -->
+          </g>
+
+          <!-- PSP secondary arrow (dashed = failover path) -->
+          <line x1="275" y1="308" x2="205" y2="390" stroke="#64748b" stroke-width="1.4"
+                stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
+
+          <!-- payment svc → saga orchestrator -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="405" y1="284" x2="475" y2="284"/>
+            <!-- saga → order svc -->
+            <line x1="550" y1="310" x2="550" y2="348"/>
+          </g>
+
+          <!-- ===== DATA FLOW (purple, to datastores) ===== -->
+          <g stroke="#7c3aed" stroke-width="1.4" fill="none" marker-end="url(#ah)" stroke-dasharray="4 3">
+            <!-- order svc → order db -->
+            <line x1="550" y1="400" x2="550" y2="436"/>
+            <!-- order svc also writes outbox (same txn, label covers it) -->
+          </g>
+
+          <!-- ===== EVENT FLOW (orange, kafka + workers) ===== -->
+          <!-- outbox relay → kafka -->
+          <line x1="617" y1="462" x2="695" y2="406" stroke="#ea580c" stroke-width="1.5"
+                fill="none" marker-end="url(#ahd)"/>
+          <!-- kafka → workers -->
+          <line x1="735" y1="382" x2="735" y2="440" stroke="#ea580c" stroke-width="1.5"
+                fill="none" marker-end="url(#ahd)"/>
+
+          <!-- ===== PSP WEBHOOK (blue, coming back in) ===== -->
+          <path d="M160,380 Q70,380 70,505 Q70,570 220,555 Q380,540 400,530"
+                stroke="#2563eb" stroke-width="1.5" stroke-dasharray="5 4" fill="none"
+                marker-end="url(#ahb)"/>
+          <text x="62" y="465" font-size="10" fill="#2563eb" writing-mode="tb" transform="rotate(-90, 62, 465)">PSP webhook (async)</text>
+
+          <!-- ===== NODES ===== -->
+
+          <!-- Buyer (client) -->
+          <rect x="235" y="16" width="210" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+          <text x="340" y="37" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Buyers (web / mobile)</text>
+          <text x="340" y="53" text-anchor="middle" font-size="10.5" fill="#64748b">browser tokenizes card via PSP JS SDK</text>
+
+          <!-- CDN / Edge / API GW (edge) -->
+          <rect x="235" y="92" width="210" height="51" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+          <text x="340" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">CDN / API Gateway</text>
+          <text x="340" y="129" text-anchor="middle" font-size="10.5" fill="#2563eb">TLS termination · auth · rate-limit</text>
+
+          <!-- Checkout Service (svc) -->
+          <rect x="235" y="174" width="210" height="51" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="340" y="194" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Checkout Service</text>
+          <text x="340" y="211" text-anchor="middle" font-size="10.5" fill="#008060">session · tax · shipping · idempotency check</text>
+
+          <!-- Idempotency store (cache) — right of checkout svc -->
+          <rect x="545" y="174" width="185" height="51" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="637" y="194" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Idempotency Store</text>
+          <text x="637" y="211" text-anchor="middle" font-size="10.5" fill="#dc2626">Redis (hot) + DB record (durable)</text>
+
+          <!-- Payment Service (svc) -->
+          <rect x="235" y="258" width="210" height="51" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="340" y="278" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Payment Service</text>
+          <text x="340" y="295" text-anchor="middle" font-size="10.5" fill="#008060">PSP adapter · circuit breaker · retries</text>
+
+          <!-- PSP Primary -->
+          <rect x="50" y="330" width="155" height="48" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="127" y="350" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">PSP Primary</text>
+          <text x="127" y="366" text-anchor="middle" font-size="10.5" fill="#dc2626">Shopify Pay / Stripe</text>
+
+          <!-- PSP Secondary -->
+          <rect x="50" y="388" width="155" height="48" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="127" y="408" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">PSP Secondary</text>
+          <text x="127" y="424" text-anchor="middle" font-size="10.5" fill="#dc2626">PayPal / Adyen (failover)</text>
+
+          <!-- Saga Orchestrator (svc) -->
+          <rect x="475" y="258" width="170" height="51" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="560" y="278" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Saga Orchestrator</text>
+          <text x="560" y="295" text-anchor="middle" font-size="10.5" fill="#008060">reserve → authorize → order → capture</text>
+
+          <!-- Order Service (svc) -->
+          <rect x="475" y="348" width="170" height="52" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="560" y="368" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Order Service</text>
+          <text x="560" y="385" text-anchor="middle" font-size="10.5" fill="#008060">source of truth · writes order + outbox</text>
+
+          <!-- Order DB (datastore) -->
+          <rect x="475" y="436" width="170" height="52" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="560" y="456" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6d28d9">Order DB (Postgres)</text>
+          <text x="560" y="473" text-anchor="middle" font-size="10.5" fill="#7c3aed">order + outbox — one transaction</text>
+
+          <!-- Kafka / Event Bus (queue) -->
+          <rect x="690" y="348" width="115" height="58" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="747" y="371" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c2410c">Kafka</text>
+          <text x="747" y="387" text-anchor="middle" font-size="10.5" fill="#ea580c">order.created · payment.*</text>
+          <text x="747" y="400" text-anchor="middle" font-size="10" fill="#ea580c">fulfillment · notifications</text>
+
+          <!-- Async Workers (svc) -->
+          <rect x="690" y="440" width="115" height="58" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="747" y="462" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Async Workers</text>
+          <text x="747" y="478" text-anchor="middle" font-size="10" fill="#008060">fulfillment · notifs</text>
+          <text x="747" y="492" text-anchor="middle" font-size="10" fill="#008060">reconciliation · analytics</text>
+
+          <!-- Webhook Receiver (svc) -->
+          <rect x="250" y="505" width="190" height="48" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="345" y="525" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">PSP Webhook Receiver</text>
+          <text x="345" y="541" text-anchor="middle" font-size="10.5" fill="#008060">reconciles AUTHORIZED → CAPTURED / FAILED</text>
+
+          <!-- webhook receiver → order svc -->
+          <line x1="440" y1="529" x2="474" y2="410" stroke="#2563eb" stroke-width="1.4"
+                fill="none" marker-end="url(#ahb)"/>
+
+          <!-- labels -->
+          <text x="499" y="196" font-size="10" fill="#dc2626">check + store</text>
+          <text x="430" y="280" font-size="10" fill="#008060">orchestrate saga</text>
+          <text x="215" y="328" font-size="10" fill="#64748b" text-anchor="middle">primary</text>
+          <text x="215" y="396" font-size="10" fill="#64748b" text-anchor="middle">failover</text>
+          <text x="644" y="430" font-size="10" fill="#ea580c" text-anchor="middle">outbox relay</text>
+        </svg>
+
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache / PSP</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> async / queue</span>
+        </div>
+        <div class="cap"><span class="en">Request flow (grey spine) · PSP webhook callback (blue dashed) · event/outbox flow (orange) · data writes (purple dashed) drawn separately.</span><span class="zh">请求流（灰色主干）· PSP webhook 回调（蓝色虚线）· 事件/outbox 流（橙色）· 数据写入（紫色虚线）分别绘制。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件逐一解析</span></h4>
+      <ul>
+        <li><strong>CDN / API Gateway</strong> — <span class="en">TLS termination, authentication, per-shop rate limiting. The buyer's browser tokenizes card data directly via the PSP's JavaScript SDK; raw card numbers never reach Shopify servers, minimizing PCI scope.</span><span class="zh">TLS 终止、身份认证、按商家限流。买家浏览器通过 PSP 的 JavaScript SDK 直接将卡数据 token 化；原始卡号永远不经过 Shopify 服务器，最小化 PCI 范围。</span></li>
+        <li><strong>Checkout Service</strong> — <span class="en">owns the session lifecycle: cart lock, tax/shipping calculation, discount validation. On <code>/complete</code>, it checks the idempotency store first before doing any work.</span><span class="zh">负责会话全生命周期：购物车锁定、税费/运费计算、折扣验证。调用 <code>/complete</code> 时，先检查幂等存储，再执行任何下游操作。</span></li>
+        <li><strong>Idempotency Store</strong> — <span class="en">Redis (fast lookup, 24-hour TTL) backed by a durable DB record. Key = client-supplied <code>Idempotency-Key</code> header. This layer prevents duplicate PSP calls and duplicate order creation.</span><span class="zh">Redis（快速查询，24 小时 TTL）+ 持久化 DB 记录兜底。键 = 客户端提供的 <code>Idempotency-Key</code> 请求头。该层防止重复 PSP 调用和重复创建订单。</span></li>
+        <li><strong>Payment Service</strong> — <span class="en">adapts to multiple PSPs. Wraps each PSP call with a circuit breaker and retry-with-backoff. Forwards the same idempotency key to the PSP so <em>the PSP</em> also deduplicates charges on our behalf.</span><span class="zh">适配多个 PSP。为每次 PSP 调用封装断路器和退避重试。将相同的 idempotency key 转发给 PSP，使 <em>PSP</em> 也能代替我们去重扣款。</span></li>
+        <li><strong>Saga Orchestrator</strong> — <span class="en">coordinates reserve-inventory → authorize-payment → create-order → capture-payment. Holds compensation logic: release inventory, void authorization on any step failure.</span><span class="zh">协调：预留库存 → 授权支付 → 创建订单 → 扣款。持有补偿逻辑：任意步骤失败时释放库存、作废授权。</span></li>
+        <li><strong>Order Service</strong> — <span class="en">writes <code>order</code> + <code>outbox</code> rows in one DB transaction (the outbox pattern). This is the durable source of truth — the PSP state machine hangs off it.</span><span class="zh">在同一 DB 事务中写入 <code>order</code> + <code>outbox</code> 行（outbox 模式）。这是持久的事实来源——支付状态机挂靠在它上面。</span></li>
+        <li><strong>Outbox relay</strong> — <span class="en">reads <code>WHERE published_at IS NULL</code>, publishes to Kafka, marks row as published. Guarantees the event is never lost even if Kafka was down at commit time.</span><span class="zh">读取 <code>WHERE published_at IS NULL</code>，发布到 Kafka，将行标记为已发布。即使提交时 Kafka 宕机，也能保证事件不丢失。</span></li>
+        <li><strong>PSP Webhook Receiver</strong> — <span class="en">ingests async PSP callbacks (CAPTURED, FAILED). Reconciles ambiguous payment states and feeds back into the payment state machine via Order Service.</span><span class="zh">接收异步 PSP 回调（CAPTURED、FAILED）。消解不确定的支付状态，并通过 Order Service 回馈支付状态机。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度拆解</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 信号的所在地</span></span></div>
+
+      <h3><span class="en">① Idempotency — the #1 thing the interviewer drills</span><span class="zh">① 幂等性——面试官最常深挖的核心</span></h3>
+      <p><span class="en">The client supplies an <code>Idempotency-Key</code> header (a UUID they generate client-side) on every <code>/complete</code> call.
+      Before touching any downstream, the server looks up the key:</span><span class="zh">客户端在每次 <code>/complete</code> 调用时提供一个 <code>Idempotency-Key</code> 请求头（客户端生成的 UUID）。服务器在接触任何下游之前先查找该键：</span></p>
+      <ul>
+        <li><span class="en">Key not found → proceed, store <code>{key, request_hash, status: PROCESSING}</code> in Redis + DB, run the saga.</span><span class="zh">键未找到 → 继续执行，在 Redis + DB 中存储 <code>{key, request_hash, status: PROCESSING}</code>，运行 saga。</span></li>
+        <li><span class="en">Key found, same hash, status PROCESSING <em>and lease still valid</em> → return <code>202 Accepted</code> — in flight, poll <code>GET /checkouts/{id}</code>.</span><span class="zh">键已找到，哈希相同，状态为 PROCESSING <em>且租约仍有效</em> → 返回 <code>202 Accepted</code>——处理中，轮询 <code>GET /checkouts/{id}</code>。</span></li>
+        <li><span class="en">Key found, status PROCESSING but <strong>lease expired</strong> (the original holder crashed mid-flight) → <strong>recover</strong>: query the PSP with our idempotency key for the true outcome, then finalize — never blind-retry.</span><span class="zh">键已找到，状态为 PROCESSING 但<strong>租约已过期</strong>（原持有者中途崩溃）→ <strong>恢复</strong>：用我们的 idempotency key 查询 PSP 获取真实结果，再完成状态终结——绝不盲目重试。</span></li>
+        <li><span class="en">Key found, same hash, status COMPLETE → return the <strong>cached 200 response</strong> — never re-charge.</span><span class="zh">键已找到，哈希相同，状态为 COMPLETE → 返回<strong>缓存的 200 响应</strong>——绝不重复扣款。</span></li>
+        <li><span class="en">Key found, <strong>different hash</strong> → return <code>409 Conflict</code> — client bug, reject immediately.</span><span class="zh">键已找到，<strong>哈希不同</strong> → 返回 <code>409 Conflict</code>——客户端 bug，立即拒绝。</span></li>
+      </ul>
+      <p><span class="en">Critically, we also forward our own server-generated idempotency key to the PSP (<code>X-Idempotency-Key</code> on the Stripe API).
+      This means even if <em>our</em> server crashes after calling the PSP but before storing the result, a replay will ask the PSP
+      for the exact same charge and receive the same response rather than a second charge.</span><span class="zh">关键的一点：我们还会将服务端生成的 idempotency key 转发给 PSP（Stripe API 中为 <code>X-Idempotency-Key</code>）。这意味着即使<em>我们的</em>服务器在调用 PSP 后、存储结果前崩溃，重放时也会向 PSP 查询同一笔扣款并得到相同响应，而不会产生第二笔扣款。</span></p>
+      <pre><code><span class="c">// Pseudocode: /checkouts/{id}/complete handler</span>
+<span class="k">function</span> handleComplete(idempotencyKey, requestBody):
+  record = <span class="k">idempotencyStore</span>.get(idempotencyKey)
+  <span class="k">if</span> record != null:
+    <span class="k">if</span> hash(requestBody) != record.requestHash: <span class="k">throw</span> <span class="s">409</span>
+    <span class="k">if</span> record.status == <span class="s">'COMPLETE'</span>: <span class="k">return</span> record.response  <span class="c">// cached, no re-charge</span>
+    <span class="k">if</span> record.status == <span class="s">'PROCESSING'</span> <span class="k">and not</span> record.leaseExpired(): <span class="k">return</span> <span class="s">202</span>  <span class="c">// in flight</span>
+    <span class="k">if</span> record.status == <span class="s">'PROCESSING'</span>: <span class="k">return</span> reconcileWithPSP(idempotencyKey)  <span class="c">// stale lease → recover, never re-charge</span>
+
+  <span class="k">idempotencyStore</span>.setProcessing(idempotencyKey, hash(requestBody), leaseSec=<span class="n">30</span>)
+  <span class="k">try</span>:
+    result = <span class="k">sagaOrchestrator</span>.run(idempotencyKey, requestBody)
+    <span class="k">idempotencyStore</span>.setComplete(idempotencyKey, result)
+    <span class="k">return</span> result
+  <span class="k">catch</span>:
+    <span class="k">idempotencyStore</span>.setFailed(idempotencyKey)
+    <span class="k">throw</span></code></pre>
+
+      <h3><span class="en">② Payment state machine &amp; async capture</span><span class="zh">② 支付状态机与异步扣款</span></h3>
+      <p><span class="en">The payment state machine is <code>INITIATED → AUTHORIZED → CAPTURED</code> (happy path), plus
+      <code>FAILED</code>, <code>VOIDED</code>, and <code>REFUNDED</code>. <strong>Capture may be asynchronous</strong>:
+      many PSPs allow a separate capture call hours after authorization (e.g. ship-then-bill). In this model:</span><span class="zh">支付状态机的正常路径为 <code>INITIATED → AUTHORIZED → CAPTURED</code>，另有 <code>FAILED</code>、<code>VOIDED</code> 和 <code>REFUNDED</code>。<strong>扣款可以异步发生</strong>：许多 PSP 允许在授权数小时后再单独调用扣款（如先发货后收费）。在此模型下：</span></p>
+      <ul>
+        <li><span class="en">Authorization happens synchronously at checkout — funds are reserved on the buyer's card.</span><span class="zh">授权在结账时同步发生——买家银行卡上的资金被预留。</span></li>
+        <li><span class="en">Capture is triggered by a fulfillment event (an async worker consuming <code>order.fulfilled</code> from Kafka).</span><span class="zh">扣款由履单事件触发（异步 worker 消费 Kafka 中的 <code>order.fulfilled</code>）。</span></li>
+        <li><span class="en">If the PSP webhook for CAPTURED never arrives, a reconciliation job polls the PSP's API by <code>psp_ref</code> to resolve ambiguity.</span><span class="zh">如果 CAPTURED 的 PSP webhook 始终未到达，对账任务将按 <code>psp_ref</code> 轮询 PSP API 来消解不确定状态。</span></li>
+      </ul>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">The most dangerous moment: network timeout after PSP call</span><span class="zh">最危险的时刻：PSP 调用后网络超时</span></span>
+        <span class="en">The server calls the PSP, the PSP charges the card, but the response never arrives (TCP timeout, pod restart, etc.).
+        <strong>Did the charge succeed?</strong> Never blindly retry — that double-charges the buyer.
+        Resolution: the idempotency key we sent to the PSP lets us call <code>GET /charges/{idempotencyKey}</code>
+        on the PSP to retrieve the outcome, then write the correct terminal state. This is why forwarding
+        the idempotency key to the PSP is non-negotiable.</span>
+        <span class="zh">服务器调用 PSP，PSP 完成扣款，但响应始终未到达（TCP 超时、Pod 重启等）。<strong>扣款是否成功？</strong>绝不能盲目重试——那会对买家重复扣款。解决方案：我们发给 PSP 的 idempotency key 允许我们调用 PSP 的 <code>GET /charges/{idempotencyKey}</code> 来获取真实结果，再写入正确的终态。这就是为什么将 idempotency key 转发给 PSP 是不可妥协的设计。</span>
+      </div>
+
+      <h3><span class="en">③ Saga orchestration with compensation</span><span class="zh">③ 带补偿的 Saga 编排</span></h3>
+      <p><span class="en">The checkout completion is a distributed transaction across Inventory, Payment, and Order services.
+      A saga breaks it into steps with compensating transactions:</span><span class="zh">结账完成是跨库存、支付、订单服务的分布式事务。Saga 将其拆解为若干步骤，每步都有对应的补偿事务：</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Step</span><span class="zh">步骤</span></th><th><span class="en">Forward action</span><span class="zh">正向操作</span></th><th><span class="en">Compensation</span><span class="zh">补偿操作</span></th></tr></thead>
+        <tbody>
+          <tr><td><span class="en">1 · Reserve inventory</span><span class="zh">1 · 预留库存</span></td><td><code>inventory.reserve(cartItems)</code></td><td><code>inventory.release(reservationId)</code></td></tr>
+          <tr><td><span class="en">2 · Authorize payment</span><span class="zh">2 · 授权支付</span></td><td><code>psp.authorize(token, amount)</code></td><td><code>psp.void(authRef)</code></td></tr>
+          <tr><td><span class="en">3 · Persist order</span><span class="zh">3 · 持久化订单</span></td><td><code>orderDB.insert(order + outbox)</code></td><td><span class="en">mark order <code>CANCELLED</code>; do NOT delete</span><span class="zh">将订单标记为 <code>CANCELLED</code>；不要删除</span></td></tr>
+          <tr><td><span class="en">4 · Capture payment</span><span class="zh">4 · 扣款</span></td><td><code>psp.capture(authRef)</code></td><td><code>psp.refund(captureRef)</code></td></tr>
+          <tr><td><span class="en">5 · Confirm fulfillment</span><span class="zh">5 · 确认履单</span></td><td><span class="en">emit <code>order.confirmed</code> via outbox</span><span class="zh">通过 outbox 发出 <code>order.confirmed</code></span></td><td><span class="en">emit <code>order.cancelled</code></span><span class="zh">发出 <code>order.cancelled</code></span></td></tr>
+        </tbody>
+      </table>
+      <p><span class="en"><strong>Orchestration vs. choreography:</strong> An orchestrator (a durable workflow engine, or a simple state machine in the Saga Service DB) is preferred here because the failure modes are complex — we need to know exactly which step failed to choose the right compensation. Choreography (each service reacts to events) is simpler to implement but harder to reason about when debugging a partial failure.</span><span class="zh"><strong>编排 vs. 编舞：</strong>此处优先选用编排器（持久化工作流引擎，或 Saga Service DB 中的简单状态机），因为失败模式复杂——我们需要精确知道哪一步失败了，才能选择正确的补偿操作。编舞（各服务对事件做出反应）实现更简单，但在调试部分失败时难以推断根因。</span></p>
+
+      <h3><span class="en">④ Outbox pattern — eliminating the dual-write problem</span><span class="zh">④ Outbox 模式——消除双写问题</span></h3>
+      <p><span class="en">After creating an order, we must publish an <code>order.created</code> event to Kafka so fulfillment, notifications, and analytics can react. The naive approach writes to DB, then publishes to Kafka — but if the process dies between those two operations, the event is lost and fulfillment never starts.</span><span class="zh">创建订单后，我们必须向 Kafka 发布 <code>order.created</code> 事件，以便履单、通知和数据分析能够响应。朴素做法是先写 DB，再发布到 Kafka——但如果进程在这两步之间崩溃，事件就会丢失，履单永远无法启动。</span></p>
+      <p><span class="en">The <strong>outbox pattern</strong> solves this: the Order Service writes the <code>order</code> row and the <code>outbox</code> row in the <em>same DB transaction</em>. A separate relay process (or CDC via Debezium) polls <code>WHERE published_at IS NULL</code>, publishes to Kafka, and marks the row published. The event is guaranteed to be published exactly once relative to the DB commit — even if Kafka is down at commit time.</span><span class="zh"><strong>Outbox 模式</strong>解决了这个问题：Order Service 在<em>同一 DB 事务</em>中同时写入 <code>order</code> 行和 <code>outbox</code> 行。单独的中继进程（或通过 Debezium 的 CDC）轮询 <code>WHERE published_at IS NULL</code>，发布到 Kafka，并将行标记为已发布。相对于 DB 提交，事件被保证精确发布一次——即使提交时 Kafka 宕机也不例外。</span></p>
+
+      <h3><span class="en">⑤ PSP outage resilience</span><span class="zh">⑤ PSP 故障韧性</span></h3>
+      <p><span class="en">The PSP is the only external dependency Shopify cannot control. When it starts failing:</span><span class="zh">PSP 是 Shopify 唯一无法控制的外部依赖。当它开始失败时：</span></p>
+      <ul>
+        <li><span class="en"><strong>Retry with exponential backoff + jitter</strong> (e.g., 0.5 s, 1 s, 2 s, 4 s) for transient errors. Cap at 3–4 attempts.</span><span class="zh">对瞬时错误进行<strong>指数退避 + 抖动重试</strong>（如 0.5 s、1 s、2 s、4 s）。最多重试 3–4 次。</span></li>
+        <li><span class="en"><strong>Circuit breaker per PSP</strong>: after 5 consecutive failures in 10 s, open the circuit (fail fast). After 30 s, half-open and probe. Prevents cascading timeouts from piling up.</span><span class="zh"><strong>每个 PSP 独立断路器</strong>：10 秒内连续 5 次失败则断路（快速失败）。30 秒后半开探测。防止级联超时堆积。</span></li>
+        <li><span class="en"><strong>Failover to secondary PSP</strong>: if the primary circuit is OPEN, route to the secondary adapter. A different idempotency key domain ensures no cross-PSP collision.</span><span class="zh"><strong>故障转移至备用 PSP</strong>：若主 PSP 断路为 OPEN，则路由到备用适配器。不同的 idempotency key 域名空间确保跨 PSP 无碰撞。</span></li>
+        <li><span class="en"><strong>Queue-and-retry UX</strong>: if all PSPs are unavailable, the checkout session enters a <code>PAYMENT_PENDING</code> state. The buyer sees "Your order is being processed — we'll email you within 5 minutes." A background worker retries when PSPs recover. The order is <em>never</em> dropped.</span><span class="zh"><strong>排队重试的用户体验</strong>：如果所有 PSP 均不可用，结账会话进入 <code>PAYMENT_PENDING</code> 状态。买家看到"您的订单正在处理中——我们将在 5 分钟内通过邮件通知您。"后台 worker 在 PSP 恢复后重试。订单<em>永远</em>不会被丢弃。</span></li>
+      </ul>
+
+      <h3><span class="en">⑥ Multi-region &amp; data residency</span><span class="zh">⑥ 多地域与数据驻留</span></h3>
+      <p><span class="en">Shopify routes buyers to the nearest region (GeoDNS / Anycast). Each region runs a full stack: Checkout, Payment, Order services, and regional Postgres shards. The key design decisions:</span><span class="zh">Shopify 通过 GeoDNS / Anycast 将买家路由到最近的地域。每个地域运行完整技术栈：Checkout、Payment、Order 服务以及地域 Postgres 分片。关键设计决策：</span></p>
+      <ul>
+        <li><span class="en"><strong>Order SoT ownership</strong>: the order is created in the region that handled the checkout, tagged with <code>region_id</code>. That region is the canonical owner. Cross-region reads are served from async replicas (eventual, fine for order history).</span><span class="zh"><strong>订单 SoT 归属</strong>：订单在处理该结账的地域创建，并打上 <code>region_id</code> 标记。该地域是规范所有者。跨地域读取由异步副本提供（最终一致性，对订单历史查询可接受）。</span></li>
+        <li><span class="en"><strong>EU data residency</strong>: EU buyers' orders, payment records, and PII are written only to EU-region shards. The outbox relay stays within EU; Kafka topics for EU orders are EU-only partitions. Analytics pipelines anonymize before cross-region export.</span><span class="zh"><strong>EU 数据驻留</strong>：EU 买家的订单、支付记录和 PII 仅写入 EU 地域分片。outbox 中继保持在 EU 境内；EU 订单的 Kafka topic 使用 EU 专属分区。分析流水线在跨地域导出前进行匿名化处理。</span></li>
+        <li><span class="en"><strong>PSP routing</strong>: some PSPs have regional endpoints (e.g., Stripe EU). Route EU checkouts to the EU Stripe endpoint to satisfy data processing agreements.</span><span class="zh"><strong>PSP 路由</strong>：部分 PSP 有地域端点（如 Stripe EU）。将 EU 结账路由到 Stripe EU 端点，以满足数据处理协议要求。</span></li>
+        <li><span class="en"><strong>Inventory coordination</strong>: a globally distributed inventory service (see Q02) is consulted during the saga's reserve step. The reservation is durable in the inventory service; the checkout region only holds the saga state.</span><span class="zh"><strong>库存协调</strong>：Saga 的预留步骤会咨询全局分布式库存服务（见 Q02）。预留状态在库存服务中持久化；结账地域仅持有 saga 状态。</span></li>
+      </ul>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">值得讨论的权衡</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Idempotency store durability</span><span class="zh">幂等存储持久性</span></td>
+            <td><span class="en">Redis only — fast (µs), but volatile; key lost on crash means a possible re-charge</span><span class="zh">仅 Redis——快速（微秒级），但易失；崩溃后键丢失可能导致重复扣款</span></td>
+            <td><span class="en">DB only — durable, ~5 ms lookup adds latency to every request</span><span class="zh">仅 DB——持久，但 ~5 ms 查询给每个请求增加延迟</span></td>
+            <td><span class="en"><strong>Both</strong>: Redis for hot-path speed, DB as durable backstop; write DB first, then Redis</span><span class="zh"><strong>两者兼用</strong>：Redis 负责热路径速度，DB 作为持久兜底；先写 DB，再写 Redis</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Saga pattern</span><span class="zh">Saga 模式</span></td>
+            <td><span class="en">Orchestration — explicit state machine, easy to debug, single orchestrator is a coupling point</span><span class="zh">编排——显式状态机，易于调试，但单一编排器是耦合点</span></td>
+            <td><span class="en">Choreography — decoupled services reacting to events, harder to trace partial failures</span><span class="zh">编舞——服务解耦对事件响应，但部分失败时难以追踪</span></td>
+            <td><span class="en"><strong>Orchestration</strong> for payment sagas: the failure modes (charged but no order) are too dangerous to debug with event traces alone</span><span class="zh">支付 saga 使用<strong>编排</strong>：失败模式（已扣款但无订单）仅靠事件追踪过于危险</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Payment capture timing</span><span class="zh">扣款时机</span></td>
+            <td><span class="en">Synchronous capture at checkout — simpler, auth + capture in one round-trip</span><span class="zh">结账时同步扣款——更简单，授权与扣款一次往返完成</span></td>
+            <td><span class="en">Auth now, async capture at fulfillment — better for ship-then-bill, requires timeout/void logic</span><span class="zh">立即授权，履单时异步扣款——更适合先发货后收费，需要超时/作废逻辑</span></td>
+            <td><span class="en"><strong>Auth-now for physical goods</strong>; async capture for subscriptions and ship-then-bill merchants; make it a per-merchant config</span><span class="zh">实物商品<strong>立即授权</strong>；订阅制和先发货后收费商家使用异步扣款；做成按商家可配置</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Order write consistency</span><span class="zh">订单写入一致性</span></td>
+            <td><span class="en">Strong consistency — synchronous write, wait for replication ack; ~2× latency</span><span class="zh">强一致性——同步写入，等待复制确认；延迟约 2 倍</span></td>
+            <td><span class="en">Availability-first — write to primary, replicate async; risk of reading a stale order briefly</span><span class="zh">可用性优先——写主库，异步复制；短暂存在读到旧订单的风险</span></td>
+            <td><span class="en"><strong>Strong consistency for order creation</strong> (it's the money SoT); eventual consistency acceptable for order history reads</span><span class="zh">订单创建使用<strong>强一致性</strong>（它是资金的 SoT）；订单历史读取可接受最终一致性</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">PSP strategy</span><span class="zh">PSP 策略</span></td>
+            <td><span class="en">Single PSP — simpler integration, single contract; full outage kills checkout</span><span class="zh">单一 PSP——集成更简单，单一合同；完全宕机会导致结账瘫痪</span></td>
+            <td><span class="en">Multi-PSP failover — resilient, higher integration cost, routing logic complexity</span><span class="zh">多 PSP 故障转移——韧性强，集成成本高，路由逻辑复杂</span></td>
+            <td><span class="en"><strong>Multi-PSP with circuit breaker</strong>: the revenue cost of a PSP outage during BFCM justifies the complexity</span><span class="zh"><strong>多 PSP + 断路器</strong>：BFCM 期间 PSP 故障的营收损失足以证明复杂度是值得的</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Event delivery semantics</span><span class="zh">事件投递语义</span></td>
+            <td><span class="en">At-least-once via outbox (current design) — consumers must be idempotent</span><span class="zh">通过 outbox 实现至少一次（当前设计）——消费者必须是幂等的</span></td>
+            <td><span class="en">Exactly-once via Kafka transactions + transactional producer — more complex, smaller consumer ecosystem support</span><span class="zh">通过 Kafka 事务 + 事务性生产者实现精确一次——更复杂，消费者生态支持较少</span></td>
+            <td><span class="en"><strong>At-least-once + idempotent consumers</strong>: simpler, broadly supported; every consumer checks a deduplication key before acting</span><span class="zh"><strong>至少一次 + 幂等消费者</strong>：更简单，广泛支持；每个消费者在操作前检查去重键</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+
+        <details class="faq-item">
+          <summary><span class="en">The user double-clicks Pay — how do you prevent two charges?</span><span class="zh">用户双击支付按钮——如何防止两次扣款？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three layers: (1) <strong>Client-side disable</strong> — the Pay button is disabled immediately on first click (UX cheapest fix). (2) <strong>Checkout session lock</strong> — a Redis <code>SET NX EX 60</code> lock on the checkout ID prevents concurrent <code>/complete</code> calls from the same session. (3) <strong>Idempotency key</strong> — the client generates one UUID per checkout attempt and reuses it on retries; if the UI bug fires two concurrent requests with the same key, the second one hits the PROCESSING record and returns 202. Defense in depth: any one of these alone is sufficient; all three running means a double-click is harmless.</span><span class="zh">三层防护：(1) <strong>客户端禁用</strong>——第一次点击后立即禁用支付按钮（最低成本的 UX 修复）。(2) <strong>Checkout session 锁</strong>——在 checkout ID 上的 Redis <code>SET NX EX 60</code> 锁，防止同一会话的并发 <code>/complete</code> 调用。(3) <strong>Idempotency key</strong>——客户端为每次结账尝试生成一个 UUID 并在重试时复用；如果 UI bug 触发了两个携带相同键的并发请求，第二个会命中 PROCESSING 记录并返回 202。纵深防御：任何一层单独都足够；三层同时运行意味着双击是无害的。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">The request timed out after we called the PSP — did the charge succeed?</span><span class="zh">调用 PSP 后请求超时——扣款究竟成功了吗？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">This is the most dangerous ambiguous state. <strong>Never blindly retry without querying the PSP first.</strong> The resolution flow: (1) The PSP adapter catches the timeout and queries <code>GET /charges?idempotency_key={key}</code> on the PSP. If the charge exists → write the AUTHORIZED state and continue the saga normally. If not → the charge did not happen; retry is safe. (2) If the PSP query itself fails (PSP is fully down), mark the payment <code>INITIATED</code> and schedule a reconciliation job to resolve it within 5 minutes, showing the buyer a "processing" state. The idempotency key forwarded to the PSP is what makes step (1) possible — without it, the PSP cannot deduplicate on our behalf.</span><span class="zh">这是最危险的不确定状态。<strong>绝不能在先查询 PSP 之前盲目重试。</strong>解决流程：(1) PSP 适配器捕获超时，向 PSP 查询 <code>GET /charges?idempotency_key={key}</code>。如果扣款存在 → 写入 AUTHORIZED 状态并正常继续 saga。如果不存在 → 扣款未发生，重试安全。(2) 如果 PSP 查询本身失败（PSP 完全宕机），将支付标记为 <code>INITIATED</code>，并安排一个对账任务在 5 分钟内解决，向买家显示"处理中"状态。转发给 PSP 的 idempotency key 是步骤 (1) 成为可能的关键——没有它，PSP 就无法代替我们去重。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">The PSP webhook arrives twice — or never arrives</span><span class="zh">PSP webhook 重复到达——或从未到达</span></summary>
+          <div class="faq-body">
+            <p><span class="en"><strong>Arrives twice:</strong> the webhook receiver deduplicates on <code>psp_ref</code> + <code>event_type</code>. Processing the same CAPTURED event twice is idempotent if we check <code>WHERE state = 'AUTHORIZED'</code> before transitioning. <strong>Never arrives:</strong> the reconciliation worker polls the PSP for all payments in <code>AUTHORIZED</code> state older than 10 minutes. It queries <code>GET /charges/{psp_ref}</code> directly and drives the state machine to the correct terminal state. This polling loop is the safety net under the webhook.</span><span class="zh"><strong>重复到达：</strong>webhook receiver 对 <code>psp_ref</code> + <code>event_type</code> 去重。如果在状态转换前检查 <code>WHERE state = 'AUTHORIZED'</code>，则两次处理同一个 CAPTURED 事件是幂等的。<strong>从未到达：</strong>对账 worker 轮询所有超过 10 分钟仍处于 <code>AUTHORIZED</code> 状态的支付，直接查询 <code>GET /charges/{psp_ref}</code>，将状态机推进到正确的终态。这个轮询循环是 webhook 之下的安全网。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Charged but the order write failed — partial failure mid-saga</span><span class="zh">已扣款但订单写入失败——saga 中途部分失败</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The saga orchestrator detects that step 3 (persist order) failed after step 2 (authorize payment) succeeded. It triggers compensation: <code>psp.void(authRef)</code> to release the reserved funds. If the void itself fails (PSP is down), the orchestrator retries the void with backoff. In the worst case — void cannot be confirmed — the orchestrator escalates to an <strong>alert + manual review</strong> queue: a human confirms the void via the PSP dashboard. The payment record is left in <code>AUTHORIZED</code> with a <code>saga_error</code> flag. Critically, the buyer is <em>never</em> told the order succeeded — they see a failure and can retry. The idempotency key ensures the retry creates the order fresh rather than double-charging.</span><span class="zh">Saga 编排器检测到步骤 2（授权支付）成功后步骤 3（持久化订单）失败。触发补偿：<code>psp.void(authRef)</code> 释放预留资金。如果作废本身失败（PSP 宕机），编排器带退避重试作废操作。最坏情况——作废无法确认——编排器升级到<strong>告警 + 人工审核</strong>队列：由人工通过 PSP 控制台确认作废。支付记录保留在 <code>AUTHORIZED</code> 状态并带 <code>saga_error</code> 标志。关键的是，买家<em>永远</em>不会被告知订单成功——他们看到失败并可以重试。idempotency key 确保重试时创建全新订单而非重复扣款。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do refunds and chargebacks work?</span><span class="zh">退款和拒付如何运作？</span></summary>
+          <div class="faq-body">
+            <p><span class="en"><strong>Refunds:</strong> <code>POST /orders/{id}/refund</code> with an idempotency key triggers a saga: call <code>psp.refund(captureRef, amount)</code> → on success, write payment state <code>REFUNDED</code> and emit <code>payment.refunded</code> → a worker updates inventory if the items are being returned. Partial refunds create a new payment row with <code>amount = partial</code>. <strong>Chargebacks:</strong> the PSP sends a <code>chargeback.created</code> webhook. The webhook receiver creates a <code>Dispute</code> record and emits an event to a disputes workflow. The merchant is notified and can submit evidence via the Shopify admin. Chargeback resolution can take weeks — the payment state machine has a <code>DISPUTED</code> state separate from the main flow.</span><span class="zh"><strong>退款：</strong>携带 idempotency key 的 <code>POST /orders/{id}/refund</code> 触发 saga：调用 <code>psp.refund(captureRef, amount)</code> → 成功后写入支付状态 <code>REFUNDED</code> 并发出 <code>payment.refunded</code> → 如果商品被退回，worker 更新库存。部分退款创建一条 <code>amount = partial</code> 的新支付行。<strong>拒付（Chargeback）：</strong>PSP 发送 <code>chargeback.created</code> webhook。webhook receiver 创建 <code>Dispute</code> 记录并向争议工作流发出事件。商家收到通知，可通过 Shopify 管理后台提交证据。拒付解决可能需要数周——支付状态机有独立于主流程的 <code>DISPUTED</code> 状态。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you reconcile against the PSP's ledger to make sure money ties out?</span><span class="zh">如何与 PSP 账本对账以确保资金平衡？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Every PSP provides a settlement or transaction report (CSV or API). A nightly reconciliation job: (1) pulls all settled transactions from the PSP for the prior day; (2) joins against the <code>payment</code> table on <code>psp_ref</code>; (3) flags rows where our captured amount ≠ PSP settled amount, or where our DB has CAPTURED but the PSP doesn't show a settlement, or vice versa. Discrepancies are written to a <code>reconciliation_alert</code> table and paged to finance ops. FX rounding and multi-currency make this non-trivial — compare in the PSP's settlement currency, not our local currency. This process is the audit trail that satisfies PCI DSS requirement 12.3 and SOC2 financial integrity controls.</span><span class="zh">每家 PSP 都提供结算或交易报告（CSV 或 API）。夜间对账任务：(1) 拉取 PSP 前一天的所有已结算交易；(2) 按 <code>psp_ref</code> 与 <code>payment</code> 表关联；(3) 标记我们的扣款金额 ≠ PSP 结算金额的行，或我们 DB 有 CAPTURED 但 PSP 不显示结算的行（反之亦然）。差异写入 <code>reconciliation_alert</code> 表并通过 PagerDuty 通知财务运营。FX 舍入和多币种使这并非小事——应以 PSP 的结算货币比较，而非本地货币。此流程是满足 PCI DSS 要求 12.3 和 SOC2 财务完整性控制的审计轨迹。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A card requires a 3-D Secure challenge — how does the async authorization flow work?</span><span class="zh">银行卡需要 3-D Secure 验证——异步授权流程如何运作？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">When the PSP signals that 3DS is required (via a <code>redirect_url</code> in its authorize response), the payment saga pauses and leaves the payment in <code>PENDING_AUTH</code> state. The buyer is redirected (or shown an in-page iframe) to the card issuer's authentication page for SCA (Strong Customer Authentication). After the buyer completes the challenge, the issuer posts a callback to the PSP, which then fires a <code>payment.authorized</code> webhook back to our PSP Webhook Receiver. The receiver drives the payment state machine from <code>PENDING_AUTH</code> → <code>AUTHORIZED</code> and resumes the saga (create order → capture). The checkout session must be kept alive with a generous TTL (~15 min) to accommodate the redirect round-trip. The idempotency key remains valid throughout — a replay after the webhook still resolves to the existing authorized charge.</span><span class="zh">当 PSP 在授权响应中返回 <code>redirect_url</code>、表明需要 3DS 验证时，支付 saga 暂停，将支付状态置为 <code>PENDING_AUTH</code>。买家被重定向（或通过页内 iframe）至发卡行的 SCA 强认证页面。买家完成验证后，发卡行将回调发送给 PSP，PSP 再通过 <code>payment.authorized</code> webhook 通知我们的 PSP Webhook Receiver。Receiver 将支付状态从 <code>PENDING_AUTH</code> 推进到 <code>AUTHORIZED</code>，并恢复 saga（创建订单 → 扣款）。Checkout session 必须设置足够长的 TTL（约 15 分钟）以覆盖重定向往返时间。整个过程中 idempotency key 保持有效——webhook 到达后的重放仍会解析到已有的授权记录，不会产生重复扣款。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you reconcile your order/payment ledger against the PSP's daily settlement report?</span><span class="zh">如何将订单/支付账本与 PSP 的每日结算报告对账？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Every PSP exposes a settlement report (CSV download or paginated API) for the prior business day. A nightly batch reconciliation job runs in three phases: (1) <strong>Ingest</strong> — pull the PSP report and load it into a staging table keyed on <code>psp_ref</code>. (2) <strong>Match</strong> — left-join the staging table against our <code>payment</code> table on <code>psp_ref</code>; rows that match with equal amounts are marked reconciled. (3) <strong>Alert</strong> — any unmatched or amount-mismatched rows are written to a <code>reconciliation_alert</code> table and paged to finance ops via PagerDuty. Common mismatch sources: FX rounding differences (always compare in PSP settlement currency), refunds that landed after the report cut-off, and chargebacks that reduced the net settlement. The process must be idempotent so that re-running it after a late report arrival does not create duplicate alerts. This is a PCI DSS requirement and a SOC2 financial integrity control.</span><span class="zh">每家 PSP 都会提供前一个工作日的结算报告（CSV 或分页 API）。夜间批量对账作业分三个阶段运行：(1) <strong>摄取</strong>——拉取 PSP 报告，以 <code>psp_ref</code> 为键加载到暂存表。(2) <strong>匹配</strong>——暂存表与我们的 <code>payment</code> 表按 <code>psp_ref</code> 左连接；金额相符的记录标记为已对账。(3) <strong>告警</strong>——未匹配或金额不符的行写入 <code>reconciliation_alert</code> 表，并通过 PagerDuty 通知财务运营团队。常见不匹配原因：FX 舍入差异（始终以 PSP 结算币种比较）、报告截止时间后才到账的退款，以及导致净结算金额减少的拒付。该作业必须是幂等的，以免在报告延迟到达后重跑时产生重复告警。此流程是 PCI DSS 合规要求，也是 SOC2 财务完整性控制项。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Partial refunds and chargebacks — what state transitions and events fire?</span><span class="zh">部分退款与拒付——会触发哪些状态流转和事件？</span></summary>
+          <div class="faq-body">
+            <p><span class="en"><strong>Partial refund:</strong> <code>POST /orders/{id}/refund</code> with <code>amount &lt; original_capture</code> creates a new <code>payment</code> row with <code>type=REFUND</code> and transitions its state <code>INITIATED → REFUNDED</code>. The parent payment's state moves to <code>PARTIALLY_REFUNDED</code>. Events emitted: <code>payment.partially_refunded</code> → inventory worker may restock items; accounting worker posts a credit memo. A full refund moves the parent to <code>REFUNDED</code>. <strong>Chargeback:</strong> the PSP sends a <code>chargeback.created</code> webhook. The receiver creates a <code>Dispute</code> record and moves the payment into a <code>DISPUTED</code> state (separate from the main CAPTURED/REFUNDED path). The event <code>payment.disputed</code> notifies the merchant to submit evidence. If the chargeback is lost, the PSP debits the merchant's account and emits <code>chargeback.lost</code>; the payment transitions to <code>CHARGEBACK_LOST</code>. Accounting events must fire at each state change to keep the financial ledger in sync.</span><span class="zh"><strong>部分退款：</strong><code>POST /orders/{id}/refund</code> 携带 <code>amount &lt; original_capture</code> 时，创建一条 <code>type=REFUND</code> 的新 <code>payment</code> 行，状态流转为 <code>INITIATED → REFUNDED</code>；父支付记录状态变为 <code>PARTIALLY_REFUNDED</code>。触发的事件：<code>payment.partially_refunded</code> → 库存 worker 可能补货；会计 worker 发出贷记凭证。全额退款则将父记录置为 <code>REFUNDED</code>。<strong>拒付（Chargeback）：</strong>PSP 发送 <code>chargeback.created</code> webhook，Receiver 创建 <code>Dispute</code> 记录，将支付状态推入独立的 <code>DISPUTED</code> 状态（与主流 CAPTURED/REFUNDED 路径分离）。<code>payment.disputed</code> 事件通知商家提交证据。若拒付败诉，PSP 从商家账户划扣并发送 <code>chargeback.lost</code>，支付状态转为 <code>CHARGEBACK_LOST</code>。每次状态变更都必须触发会计事件，以保持财务账本同步。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Tax/shipping calculation service fails mid-checkout — what happens?</span><span class="zh">结账途中税费/运费计算服务失败——系统如何处理？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Tax and shipping totals must be finalized <em>before</em> authorization — authorizing the wrong amount creates a legal and accounting mess. If the tax/shipping service is unavailable during <code>/checkouts/{id}/complete</code>, the correct behavior is to <strong>fail the checkout step gracefully</strong>: return an error to the buyer, leave the checkout session in <code>CREATED</code> (not <code>PROCESSING</code>), and do not attempt PSP authorization. The client retries <code>/complete</code> after a short back-off; the idempotency key ensures no charge is attempted until totals are confirmed. To build resilience: (1) a short cached result (30 s TTL) covers transient blips during the checkout session; (2) a circuit breaker prevents cascading timeouts; (3) a fallback to a static tax table is acceptable only for known-simple jurisdictions as a last resort. The invariant to state explicitly: <em>never authorize payment on stale or missing totals</em>.</span><span class="zh">税费和运费金额必须在授权<em>之前</em>确定——对错误金额授权会带来法律和会计上的混乱。如果在 <code>/checkouts/{id}/complete</code> 期间税费/运费服务不可用，正确做法是<strong>优雅地让该步骤失败</strong>：向买家返回错误，将 checkout session 保持在 <code>CREATED</code>（而非 <code>PROCESSING</code>），不尝试 PSP 授权。客户端在短暂退避后重试 <code>/complete</code>；idempotency key 确保在总金额确认之前不会发起扣款。韧性设计建议：(1) 短时缓存结果（30 秒 TTL）可覆盖结账期间的短暂抖动；(2) 断路器防止级联超时；(3) 仅作为最后手段，在已知简单税区可回退到静态税率表。需要明确陈述的不变量：<em>永远不要对陈旧或缺失的总金额发起支付授权</em>。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Multi-currency / FX: where is the rate computed and locked?</span><span class="zh">多币种 / FX：汇率在哪里计算并锁定？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The FX rate must be locked at <strong>checkout creation</strong> (<code>POST /checkouts</code>), not at payment time — this prevents the buyer from seeing a different total if the rate shifts during the 30-minute session. The checkout session stores both the <strong>presentment currency</strong> (what the buyer sees, e.g. EUR) and the <strong>settlement currency</strong> (what the merchant gets paid in, e.g. USD), along with the locked rate and the timestamp. The PSP receives the charge in the presentment currency and handles FX on its end, or we charge in the settlement currency and display an equivalent — depending on the PSP's multi-currency capabilities. On retry, the idempotency key ensures the same locked rate is used; the idempotency record stores the totals object so a replay never recomputes FX. A new checkout session must be created if the buyer changes currency — there is no in-session rate update.</span><span class="zh">FX 汇率必须在<strong>创建 checkout session 时</strong>（<code>POST /checkouts</code>）锁定，而不是在支付时——这样可以防止在 30 分钟的会话期间汇率波动导致买家看到不同的总金额。Checkout session 同时存储<strong>展示货币</strong>（买家看到的，例如 EUR）和<strong>结算货币</strong>（商家收款的，例如 USD），以及锁定汇率和时间戳。PSP 以展示货币收取费用并在其端处理 FX，或者我们以结算货币扣款并展示等值金额——取决于 PSP 的多币种能力。重试时，idempotency key 确保使用同一锁定汇率；幂等记录存储了 totals 对象，重放时永远不会重新计算 FX。如果买家切换货币，必须创建新的 checkout session——不支持会话内汇率更新。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you test idempotency and partial-failure paths?</span><span class="zh">如何测试幂等性和部分失败路径？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Idempotency and partial failures cannot be verified by happy-path integration tests alone — they require deliberate <strong>fault injection</strong>. Concrete test cases: (1) <strong>Kill after PSP call, before DB write</strong> — inject a process crash immediately after the PSP authorize response; replay the same idempotency key; assert the PSP is queried (not re-charged) and the final order count is exactly one. (2) <strong>Duplicate concurrent requests</strong> — send two identical <code>/complete</code> requests with the same idempotency key simultaneously; assert exactly one charge and one order created. (3) <strong>Replay webhooks</strong> — deliver the same <code>payment.captured</code> webhook twice; assert the payment state transitions only once and no duplicate fulfillment events fire. (4) <strong>Stale idempotency lease</strong> — artificially expire the PROCESSING lease; assert the handler recovers via PSP query rather than re-charging. These tests should run in a staging environment against a PSP sandbox that supports idempotency key inspection (Stripe test mode works well). Property-based tests can fuzz request body hashes to verify 409 behavior.</span><span class="zh">幂等性和部分失败路径仅靠正常路径的集成测试无法验证——必须进行刻意的<strong>故障注入</strong>。具体测试用例：(1) <strong>PSP 调用后、DB 写入前崩溃</strong>——在 PSP 授权响应返回后立即注入进程崩溃；用相同的 idempotency key 重放；断言 PSP 被查询（而非重复扣款），最终订单数量恰好为一。(2) <strong>并发重复请求</strong>——同时发送两个携带相同 idempotency key 的 <code>/complete</code> 请求；断言恰好只有一次扣款和一个订单被创建。(3) <strong>重放 webhook</strong>——两次投递同一个 <code>payment.captured</code> webhook；断言支付状态只流转一次，且不触发重复的履单事件。(4) <strong>幂等租约过期</strong>——人为使 PROCESSING 租约过期；断言处理器通过 PSP 查询恢复，而非重新扣款。这些测试应在 Staging 环境中针对支持 idempotency key 查询的 PSP 沙箱运行（Stripe 测试模式效果良好）。基于属性的测试可以对请求体哈希进行模糊测试，以验证 409 行为。</span></p>
+          </div>
+        </details>
+
+      </div>
+
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct">⭐ <span class="en">Staff-level summary — say these five things</span><span class="zh">Staff 级总结——务必说出这五点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Idempotency key end-to-end</strong>: client → Checkout Service → PSP. The key must travel all the way to the PSP so that a crashed-and-replayed request resolves against an existing charge, never creates a new one.</span><span class="zh"><strong>端到端 idempotency key</strong>：客户端 → Checkout Service → PSP。该键必须一路传到 PSP，这样崩溃后重放的请求会解析到已有扣款，永远不会创建新的扣款。</span></li>
+          <li><span class="en"><strong>Order is the durable source of truth</strong>; payment is a state machine hanging off it. The DB is the money ledger — never derive financial state from cache or event logs alone.</span><span class="zh"><strong>订单是持久的事实来源</strong>；支付是挂靠在它上面的状态机。DB 是资金账本——永远不要仅从缓存或事件日志推导财务状态。</span></li>
+          <li><span class="en"><strong>Outbox eliminates dual-write loss</strong>: order + event in one DB transaction; relay publishes asynchronously. This is how you guarantee the fulfillment pipeline always starts.</span><span class="zh"><strong>Outbox 消除双写丢失</strong>：订单 + 事件在同一 DB 事务中写入；中继异步发布。这是保证履单流水线始终启动的方式。</span></li>
+          <li><span class="en"><strong>Saga with explicit compensation</strong>: the orchestrator knows which step failed and runs the right compensation. Choreography is too hard to debug when real money is involved.</span><span class="zh"><strong>带显式补偿的 Saga</strong>：编排器知道哪一步失败并执行正确的补偿。涉及真实资金时，编舞模式太难调试。</span></li>
+          <li><span class="en"><strong>PSP is an unreliable dependency</strong>: circuit-break, failover, reconcile. The three failure cases to name: (a) timeout after PSP call (query first, never blind retry), (b) webhook lost (reconciliation polling loop), (c) PSP fully down (queue-and-retry, never drop the order).</span><span class="zh"><strong>PSP 是不可靠的依赖</strong>：断路、故障转移、对账。需要点名的三种失败场景：(a) PSP 调用后超时（先查询，绝不盲目重试），(b) webhook 丢失（对账轮询循环），(c) PSP 完全宕机（排队重试，永不丢弃订单）。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- § SOURCES -->
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview patterns (checkout, payments, idempotency)</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify: payment processing, sagas, and outbox pattern</a></li>
+        <li><a href="https://www.designgurus.io/answers/detail/what-shopify-system-design-interview-questions-to-prepare">Design Gurus — Shopify system design interview questions: checkout, payments, and resilience</a></li>
+      </ul>
+      <p style="margin-top:14px;">
+        <a href="02_inventory_management.html">← 02 · Inventory Management</a>
+        &nbsp;·&nbsp;
+        <a href="04_multi_tenant_sharding.html">04 · Multi-tenant Sharding →</a>
+      </p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

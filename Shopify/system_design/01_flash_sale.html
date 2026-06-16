@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · Flash Sale / BFCM Traffic Surge — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 01 · Flash Sale</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="index.html"><span class="n">←</span> Index</a>
+    <a href="02_inventory_management.html"><span class="n">→</span> 02 Inventory</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 1 · Signature · ★★★★★</div>
+      <h1>Design a Flash Sale / BFCM Traffic Surge</h1>
+      <p class="en">"A limited sneaker drop: <strong>1,000 pairs, 1,000,000 buyers, sells out in ten seconds.</strong>
+      Design the system so it never oversells, the rest of Shopify stays up, and admitted buyers get a smooth checkout."</p>
+      <p class="zh">"限量球鞋秒杀：<strong>1,000 双鞋、1,000,000 买家、十秒内售罄。</strong>请设计这套系统，确保永不超卖、Shopify 其余功能不受影响，且已放行的买家能顺畅完成结账。"</p>
+      <div class="meta">
+        <span class="chip">📍 Seen: sneaker-drop / BFCM framing</span>
+        <span class="chip">🎯 Tests: spike handling + correctness</span>
+        <span class="chip">⏱ 60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why Shopify loves this one</span><span class="zh">为什么 Shopify 偏爱这道题</span></span>
+      <p class="en">It is the purest expression of Shopify's reality: a <strong>1000× spike on a single hot key</strong> (one SKU) while
+      a hard business invariant (<strong>never oversell</strong>) must hold, and the <strong>blast radius must not reach other merchants</strong>.
+      Generic "design Twitter" instincts (scale the read fleet) actively mislead here.</p>
+      <p class="zh">这道题是 Shopify 现实场景最纯粹的体现：<strong>单个热点 key（一个 SKU）上的 1000× 流量尖峰</strong>，同时必须遵守一条硬性业务不变式（<strong>永不超卖</strong>），且<strong>爆炸半径不得波及其他商家</strong>。套用"设计 Twitter"的惯性思维（扩容读集群）在此会彻底误导方向。</p>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 先问清楚，不要假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li class="en">Merchant configures a sale: variant, total units, start time, <strong>per-user limit</strong>.</li>
+            <li class="zh">商家配置秒杀活动：商品规格、总库存量、开始时间、<strong>每用户购买上限</strong>。</li>
+            <li class="en">Before start, buyers wait in a <strong>queue / waiting room</strong>.</li>
+            <li class="zh">活动开始前，买家在<strong>虚拟队列 / 等候室</strong>中等待。</li>
+            <li class="en">At T0, admit buyers, let them <strong>reserve → checkout → pay</strong>.</li>
+            <li class="zh">T0 时刻放行买家，允许其完成<strong>预订 → 结账 → 支付</strong>流程。</li>
+            <li class="en">Show an approximate "remaining / sold out" state.</li>
+            <li class="zh">展示近似的"剩余库存 / 已售罄"状态。</li>
+            <li class="en">Enforce per-user limit; mitigate bots/scalpers.</li>
+            <li class="zh">执行每用户购买上限；防范机器人和黄牛。</li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li class="en"><strong>Never oversell</strong> — hard invariant (strong consistency on stock).</li>
+            <li class="zh"><strong>永不超卖</strong> — 硬性不变式（库存强一致性）。</li>
+            <li class="en"><strong>Isolation</strong> — must not degrade other merchants' checkout.</li>
+            <li class="zh"><strong>隔离性</strong> — 不得影响其他商家的结账流程。</li>
+            <li class="en">Spike: ~1M concurrent, sellout in seconds → 100×–1000× baseline.</li>
+            <li class="zh">流量尖峰：约 100 万并发，数秒内售罄 → 基线的 100×–1000×。</li>
+            <li class="en">Low latency for admitted users; <strong>graceful degradation</strong> for the herd.</li>
+            <li class="zh">已放行用户低延迟；大量等候用户实现<strong>优雅降级</strong>。</li>
+            <li class="en">Fairness — not purely "fastest network wins".</li>
+            <li class="zh">公平性 — 不能纯粹由网速决定胜负。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to actually ask out loud</span><span class="zh">面试时应当大声提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li class="en">One hot SKU or many? <em>(Assume one; generalize at the end.)</em></li>
+          <li class="zh">单一热点 SKU 还是多个？<em>（先假设一个，最后再推广。）</em></li>
+          <li class="en">Is <strong>strict FIFO fairness</strong> required, or just "no oversell + bot mitigation"? This changes the queue design materially.</li>
+          <li class="zh">是否需要<strong>严格的 FIFO 公平性</strong>，还是"不超卖 + 防机器人"即可？这会实质性地影响队列设计。</li>
+          <li class="en">Single-region inventory or global? <em>(Start single source of truth, extend in follow-ups.)</em></li>
+          <li class="zh">库存是单区域还是全球分布？<em>（先从单一数据源开始，后续再扩展。）</em></li>
+          <li class="en">Does a reservation <strong>hold stock</strong> during checkout? For how long (TTL)?</li>
+          <li class="zh">预订期间是否<strong>锁定库存</strong>？锁定时长（TTL）是多少？</li>
+          <li class="en">Is payment captured synchronously at purchase, or authorized then captured async?</li>
+          <li class="zh">支付是在下单时同步扣款，还是先授权后异步捕获？</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找到真正的瓶颈</span></span></div>
+      <p class="en">The insight that wins the round: <strong>the bottleneck is the admission fan-in, not the inventory write.</strong>
+      There are only ~1,000 successful purchases — trivial for any database. The pressure is a million people <em>asking</em> at once.</p>
+      <p class="zh">赢得这道题的关键洞察：<strong>瓶颈在于入场流量的汇聚，而非库存写入。</strong>成功购买的只有约 1,000 笔——对任何数据库都微不足道。压力来自百万人<em>同时发出请求</em>。</p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">1M</div><div class="l"><span class="en">concurrent buyers at T0</span><span class="zh">T0 时刻并发买家数</span></div></div>
+        <div class="kpi"><div class="v">~100k</div><div class="l"><span class="en">"join queue" QPS (first seconds)</span><span class="zh">"加入队列" QPS（开售前几秒）</span></div></div>
+        <div class="kpi"><div class="v">1,000</div><div class="l"><span class="en">units (the hard cap)</span><span class="zh">库存数量（硬上限）</span></div></div>
+        <div class="kpi"><div class="v">~2k</div><div class="l"><span class="en">total DB writes (RESERVED+PAID)</span><span class="zh">DB 总写入量（RESERVED+PAID）</span></div></div>
+      </div>
+      <ul>
+        <li class="en"><strong>Static page load</strong> (1M) is served entirely by the <strong>CDN</strong> → ~0 origin load. This is the cheapest place to absorb the herd.</li>
+        <li class="zh"><strong>静态页面加载</strong>（100 万次）完全由 <strong>CDN</strong> 承载 → 源站负载约为零。这是吸收洪峰流量成本最低的位置。</li>
+        <li class="en"><strong>Admission/status polling</strong> is the heavy path: 1M clients asking "am I in yet?" If each polls every 3s, that's ~330k QPS of cheap reads. Mitigate with edge-cached responses, jittered back-off, or push (SSE/long-poll).</li>
+        <li class="zh"><strong>入场状态轮询</strong>是重负载路径：100 万客户端询问"我进了吗？"若每 3 秒轮询一次，约产生 33 万 QPS 的轻量读请求。应对方案：边缘缓存响应、抖动退避，或使用推送（SSE/长轮询）。</li>
+        <li class="en"><strong>Redis</strong> <code>DECRBY</code> is single-digit µs; one core does ~100k+ ops/s on discrete round-trips (far more when pipelined). The 1,000 decrements are nothing — Redis is the gate precisely because it is this fast and atomic.</li>
+        <li class="zh"><strong>Redis</strong> <code>DECRBY</code> 延迟为个位数微秒级；单核在离散往返模式下可处理 10 万+ ops/s（流水线模式更高）。1,000 次自减操作毫无压力——Redis 之所以充当闸口，正是因为它既快又原子。</li>
+        <li class="en"><strong>Order DB</strong>: ~1k RESERVED + ~1k PAID rows. Not a bottleneck. Don't waste design time scaling it.</li>
+        <li class="zh"><strong>订单数据库</strong>：约 1k 条 RESERVED + 1k 条 PAID 记录。不是瓶颈，不要浪费时间在扩容上。</li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct">⭐ <span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <p class="en">State explicitly: <em>"I will not scale checkout 1000×. I will shed the herd at the cheapest layer (the edge) and meter a thin stream into a checkout pipeline sized for the real demand — 1,000 units."</em></p>
+        <p class="zh">明确说出：<em>"我不会将结账系统扩容 1000 倍。我会在最廉价的层（边缘层）削减洪峰，然后将一条细流精确计量地导入按真实需求——1,000 件——定尺寸的结账流水线。"</em></p>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row"><span class="method post">POST</span><span class="path">/flash/{saleId}/join</span><span class="desc"><span class="en">enqueue, returns {token, position, etaSeconds}</span><span class="zh">加入队列，返回 {token, position, etaSeconds}</span></span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/flash/{saleId}/status?token=…</span><span class="desc"><span class="en">{state: WAITING|ADMITTED|EXPIRED, position}</span><span class="zh">{state: WAITING|ADMITTED|EXPIRED, position}</span></span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/flash/{saleId}/reserve</span><span class="desc"><span class="en">ADMITTED token → {reservationId, expiresAt} · the atomic gate</span><span class="zh">ADMITTED 令牌 → {reservationId, expiresAt} · 原子闸口</span></span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/checkout/{reservationId}/pay</span><span class="desc"><span class="en">{idempotencyKey, paymentToken} → {orderId, status}</span><span class="zh">{idempotencyKey, paymentToken} → {orderId, status}</span></span></div>
+      </div>
+      <p class="en">The token is a <strong>signed (JWT) admission ticket</strong> — the reserve endpoint validates it statelessly, so the
+      checkout fleet holds no per-user session and scales horizontally.</p>
+      <p class="zh">令牌是一张<strong>签名（JWT）入场票</strong>——reserve 端点以无状态方式验证，结账集群无需持有每用户会话，可水平扩展。</p>
+    </section>
+
+    <!-- 4 DATA -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Source of truth (relational — MySQL/Postgres)</span><span class="zh">数据权威来源（关系型 — MySQL/Postgres）</span></h4>
+      <pre><code><span class="k">flash_sale</span>(sale_id PK, shop_id, variant_id, qty_total, qty_sold,
+           per_user_limit, starts_at, status)
+<span class="k">reservation</span>(reservation_id PK, sale_id, user_id, status, created_at, expires_at,
+            <span class="c">UNIQUE(sale_id, user_id)</span>  <span class="c">-- backstops the per-user limit</span>)
+<span class="k">order</span>(order_id PK, reservation_id FK, user_id, amount, status,
+      <span class="c">UNIQUE(idempotency_key)</span>     <span class="c">-- no double-charge on retry</span>)</code></pre>
+      <h4><span class="en">Hot path (Redis — the gate &amp; queue)</span><span class="zh">热路径（Redis — 闸口与队列）</span></h4>
+      <pre><code><span class="n">sale:{id}:stock</span>      <span class="c">// INT, the authoritative live counter (DECRBY)</span>
+<span class="n">sale:{id}:queue</span>      <span class="c">// STREAM/LIST, waiting buyers (only if strict FIFO)</span>
+<span class="n">sale:{id}:admitted</span>   <span class="c">// SET w/ TTL, who may call /reserve</span>
+<span class="n">user:{id}:sale:{id}</span>  <span class="c">// NX key, per-user purchase guard</span></code></pre>
+    </section>
+
+    <!-- 5 ARCH -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">three flows, drawn apart</span><span class="zh">三条数据流，分开绘制</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 545" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- spine arrows -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="360" y1="64" x2="360" y2="90"/>
+            <line x1="360" y1="140" x2="360" y2="166"/>
+            <line x1="360" y1="216" x2="360" y2="250"/>
+            <line x1="360" y1="304" x2="360" y2="342"/>
+            <line x1="360" y1="396" x2="360" y2="438"/>
+            <!-- waiting room <-> redis tokens -->
+            <line x1="455" y1="278" x2="558" y2="278"/>
+            <line x1="558" y1="292" x2="457" y2="292"/>
+            <!-- purchase -> redis stock (left) -->
+            <line x1="265" y1="362" x2="232" y2="362"/>
+            <!-- purchase -> kafka (right) -->
+            <line x1="455" y1="368" x2="558" y2="368"/>
+            <!-- kafka -> workers -->
+            <line x1="650" y1="396" x2="650" y2="438"/>
+          </g>
+
+          <!-- feedback: expiry worker INCRBY restores stock (dashed) -->
+          <path d="M560,466 L130,466 L130,398" stroke="#ea580c" stroke-width="1.5"
+                stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)"/>
+          <text x="345" y="461" font-size="10.5" fill="#ea580c" text-anchor="middle">reservation expiry → INCRBY restores the slot</text>
+
+          <!-- nodes -->
+          <!-- client -->
+          <g>
+            <rect x="265" y="16" width="190" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="360" y="38" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Buyers (web / mobile)</text>
+            <text x="360" y="54" text-anchor="middle" font-size="10.5" fill="#64748b">1M concurrent at T0</text>
+          </g>
+          <!-- edge -->
+          <g>
+            <rect x="265" y="90" width="190" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="360" y="111" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">CDN / Edge</text>
+            <text x="360" y="128" text-anchor="middle" font-size="10.5" fill="#2563eb">static + cached waiting-room shell</text>
+          </g>
+          <g>
+            <rect x="265" y="166" width="190" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="360" y="187" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">API Gateway · WAF</text>
+            <text x="360" y="204" text-anchor="middle" font-size="10.5" fill="#2563eb">per-IP cap · bot filter</text>
+          </g>
+          <!-- services -->
+          <g>
+            <rect x="265" y="250" width="190" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="360" y="272" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Waiting-Room Svc</text>
+            <text x="360" y="289" text-anchor="middle" font-size="10.5" fill="#008060">admission control · issues tokens</text>
+          </g>
+          <g>
+            <rect x="265" y="342" width="190" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="360" y="364" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Purchase / Reserve Svc</text>
+            <text x="360" y="381" text-anchor="middle" font-size="10.5" fill="#008060">validates token · calls gate</text>
+          </g>
+          <!-- order db -->
+          <g>
+            <rect x="265" y="438" width="190" height="52" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="360" y="459" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Order DB (SoT)</text>
+            <text x="360" y="476" text-anchor="middle" font-size="10.5" fill="#7c3aed">RESERVED → PAID · conditional UPDATE</text>
+          </g>
+          <!-- redis tokens (right, aligned waiting room) -->
+          <g>
+            <rect x="560" y="250" width="180" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="650" y="272" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis — queue/tokens</text>
+            <text x="650" y="289" text-anchor="middle" font-size="10.5" fill="#dc2626">admitted set · position</text>
+          </g>
+          <!-- redis stock (left, aligned purchase) -->
+          <g>
+            <rect x="30" y="342" width="200" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="130" y="364" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis — stock counter</text>
+            <text x="130" y="381" text-anchor="middle" font-size="10.5" fill="#dc2626">atomic DECRBY (the gate)</text>
+          </g>
+          <!-- kafka (right, aligned purchase) -->
+          <g>
+            <rect x="560" y="342" width="180" height="54" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="650" y="364" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka — order events</text>
+            <text x="650" y="381" text-anchor="middle" font-size="10.5" fill="#ea580c">order.reserved / .paid</text>
+          </g>
+          <!-- workers (right, aligned order db) -->
+          <g>
+            <rect x="560" y="438" width="180" height="52" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="650" y="459" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Async workers</text>
+            <text x="650" y="476" text-anchor="middle" font-size="10" fill="#008060">expiry · payment · webhooks</text>
+          </g>
+
+          <!-- inline labels -->
+          <text x="372" y="84" font-size="10" fill="#94a3b8">↓ herd absorbed here</text>
+          <text x="139" y="335" font-size="10" fill="#dc2626" text-anchor="middle">DECRBY ≥0? ok : reject</text>
+          <text x="508" y="362" font-size="10" fill="#ea580c" text-anchor="middle">emit</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> async / queue</span>
+        </div>
+        <div class="cap"><span class="en">Request flow (spine) · data flow (to Redis/DB) · event flow (Kafka → workers) drawn separately.</span><span class="zh">请求流（主干）· 数据流（至 Redis/DB）· 事件流（Kafka → workers）分开绘制。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件详解</span></h4>
+      <ul>
+        <li class="en"><strong>CDN / Edge</strong> — serves the static storefront and a cached "waiting-room" shell. 99% of the 1M never reach the origin. This is where the spike dies.</li>
+        <li class="zh"><strong>CDN / Edge</strong> — 提供静态店面和缓存的"等候室"页面壳。100 万请求中 99% 永远不会抵达源站。这里是流量洪峰消亡之处。</li>
+        <li class="en"><strong>Gateway · WAF</strong> — per-IP caps, bot filtering, and a kill-switch to circuit-break <em>this sale</em> without touching the rest of Shopify.</li>
+        <li class="zh"><strong>Gateway · WAF</strong> — 每 IP 速率上限、机器人过滤，以及用于熔断<em>本次活动</em>的断路开关，不影响 Shopify 其他功能。</li>
+        <li class="en"><strong>Waiting-Room Service</strong> — admission control. Issues signed tokens at a metered rate (≈ stock-drain rate × over-admit factor), converting a herd into a thin stream.</li>
+        <li class="zh"><strong>等候室服务</strong> — 入场控制。以受控速率（≈ 库存消耗速率 × 超发系数）签发令牌，将洪峰转化为细流。</li>
+        <li class="en"><strong>Purchase/Reserve Service</strong> — stateless; validates the token, runs the <strong>atomic Redis gate</strong>, writes a RESERVED row, emits an event.</li>
+        <li class="zh"><strong>购买/预订服务</strong> — 无状态；验证令牌，执行<strong>原子 Redis 闸口</strong>，写入 RESERVED 行，发出事件。</li>
+        <li class="en"><strong>Redis</strong> — the authoritative live stock counter + admission state. Tiny, fixed-size, blisteringly fast.</li>
+        <li class="zh"><strong>Redis</strong> — 权威的实时库存计数器 + 入场状态。数据量极小、固定大小、速度极快。</li>
+        <li class="en"><strong>Order DB</strong> — durable source of truth; a conditional <code>UPDATE … WHERE qty_sold &lt; qty_total</code> is the second oversell backstop.</li>
+        <li class="zh"><strong>订单数据库</strong> — 持久化权威来源；条件式 <code>UPDATE … WHERE qty_sold &lt; qty_total</code> 是防超卖的第二道防线。</li>
+        <li class="en"><strong>Kafka + workers</strong> — async reservation-expiry (releases unpaid slots), payment capture, webhooks, analytics.</li>
+        <li class="zh"><strong>Kafka + workers</strong> — 异步处理预订到期（释放未支付名额）、支付捕获、webhook 回调、数据分析。</li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVE -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度解析</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在之处</span></span></div>
+
+      <h3><span class="en">① Virtual waiting room — turn a herd into a metered stream</span><span class="zh">① 虚拟等候室 — 将洪峰转化为受控细流</span></h3>
+      <p class="en">The edge serves a static shell; client JS hits a lightweight <code>/join</code> then polls <code>/status</code>. The
+      admission controller drains the waiting set and flips buyers to <code>ADMITTED</code> at a controlled rate — only as fast
+      as the purchase pipeline can confirm sales. Buyers without an <code>ADMITTED</code> token <em>never touch checkout</em>.
+      The rate is set to <strong>stock-drain-rate × over-admit factor</strong> (e.g. admit 2,000 to sell 1,000, since some abandon).</p>
+      <p class="zh">边缘层提供静态页面壳；客户端 JS 调用轻量级 <code>/join</code> 后轮询 <code>/status</code>。入场控制器以受控速率从等待集合中取出买家并将其翻转为 <code>ADMITTED</code>——速率不超过购买流水线的确认速度。没有 <code>ADMITTED</code> 令牌的买家<em>永远不会触达结账</em>。速率设定为<strong>库存消耗速率 × 超发系数</strong>（例如：卖 1,000 件则放行 2,000 人，因为部分人会放弃）。</p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Polling vs push at 1M clients</span><span class="zh">百万客户端的轮询 vs 推送</span></span>
+        <p class="en">Naïve 1 s polling = ~1M QPS of "not yet". Fixes: (a) edge-cache the "WAITING" response for ~1 s so most polls never reach origin;
+        (b) jittered exponential back-off; (c) SSE / long-poll to push the ADMITTED transition. Pick SSE if the panel pushes on cost at scale.</p>
+        <p class="zh">朴素的 1 秒轮询 = 约 100 万 QPS 的"尚未放行"。修复方案：(a) 在边缘缓存"WAITING"响应约 1 秒，使大多数轮询永远不到达源站；(b) 加入抖动的指数退避；(c) 用 SSE / 长轮询推送 ADMITTED 状态变更。若面试官追问规模成本，选 SSE。</p>
+      </div>
+
+      <h3><span class="en">② The atomic inventory gate — never oversell</span><span class="zh">② 原子库存闸口 — 永不超卖</span></h3>
+      <p class="en">Stock is loaded into Redis at sale start. Each reserve runs an atomic decrement; a negative result is compensated and rejected.
+      Combine the stock check <em>and</em> the per-user guard in <strong>one Lua script</strong> so it's a single atomic round-trip:</p>
+      <p class="zh">销售开始时将库存加载到 Redis。每次预订执行一次原子自减；结果为负则补偿回滚并拒绝。将库存检查<em>与</em>每用户限购保护合并在<strong>一个 Lua 脚本</strong>中，实现单次原子往返：</p>
+      <pre><code><span class="c">-- KEYS[1]=sale:{id}:stock  KEYS[2]=user:{id}:sale:{id}  ARGV[1]=limit  ARGV[2]=ttlSeconds</span>
+<span class="c">-- NOTE: GET returns a string or false, so coerce with tonumber()/or 0 and compare numerically.</span>
+<span class="k">local</span> used = <span class="k">tonumber</span>(redis.call(<span class="s">'GET'</span>, KEYS[2]) <span class="k">or</span> <span class="n">0</span>)
+<span class="k">if</span> used >= <span class="k">tonumber</span>(ARGV[1]) <span class="k">then return</span> <span class="s">'USER_LIMIT'</span> <span class="k">end</span>
+<span class="k">local</span> n = redis.call(<span class="s">'DECRBY'</span>, KEYS[1], 1)
+<span class="k">if</span> n &lt; 0 <span class="k">then</span> redis.call(<span class="s">'INCRBY'</span>, KEYS[1], 1); <span class="k">return</span> <span class="s">'SOLD_OUT'</span> <span class="k">end</span>
+redis.call(<span class="s">'INCR'</span>, KEYS[2])
+redis.call(<span class="s">'EXPIRE'</span>, KEYS[2], ARGV[2])  <span class="c">-- TTL so per-user guard keys don't leak after the sale</span>
+<span class="k">return</span> <span class="s">'OK'</span></code></pre>
+
+      <h3><span class="en">③ Reservation TTL &amp; compensation — don't let abandoners lock the inventory</span><span class="zh">③ 预订 TTL 与补偿 — 不让放弃者锁死库存</span></h3>
+      <p class="en">A successful reserve writes a <code>RESERVED</code> order with <code>expires_at = now + 10 min</code>. If the buyer doesn't pay,
+      the expiry worker cancels the row and <code>INCRBY</code>s the Redis counter, returning the slot to the pool (the dashed loop in the diagram).
+      This is what makes "reserve-then-pay" safe: no oversell <em>and</em> no permanent lockup.</p>
+      <p class="zh">成功预订后写入一条 <code>RESERVED</code> 订单，<code>expires_at = now + 10 min</code>。若买家未完成支付，到期工作器取消该行并执行 <code>INCRBY</code> 恢复 Redis 计数器，将名额归还到资源池（即图中的虚线循环）。这正是"先预订再支付"安全的原因：既不超卖，<em>也</em>不会永久锁死库存。</p>
+
+      <h3><span class="en">④ Defense in depth — three oversell barriers</span><span class="zh">④ 纵深防御 — 三道防超卖屏障</span></h3>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Layer</span><span class="zh">层级</span></th><th><span class="en">Mechanism</span><span class="zh">机制</span></th><th><span class="en">Why it exists</span><span class="zh">存在原因</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td>L1 · Redis gate</td>
+            <td><span class="en">atomic <code>DECRBY</code>, reject on negative</span><span class="zh">原子 <code>DECRBY</code>，结果为负则拒绝</span></td>
+            <td><span class="en">fast authoritative live cap</span><span class="zh">快速权威的实时上限</span></td>
+          </tr>
+          <tr>
+            <td>L2 · DB conditional write</td>
+            <td><code>UPDATE … SET qty_sold=qty_sold+1 WHERE qty_sold &lt; qty_total</code>; <span class="en">0 rows ⇒ rollback</span><span class="zh">0 行受影响 ⇒ 回滚</span></td>
+            <td><span class="en"><strong>durable</strong> backstop if Redis lost state</span><span class="zh">Redis 丢失状态时的<strong>持久化</strong>兜底</span></td>
+          </tr>
+          <tr>
+            <td>L3 · Reconciliation</td>
+            <td><span class="en">job every few min: count RESERVED+PAID vs qty_sold, alert on drift &gt; 0</span><span class="zh">每隔几分钟运行：统计 RESERVED+PAID 与 qty_sold 的差值，漂移 &gt; 0 时告警</span></td>
+            <td><span class="en">catches silent bugs / split-brain</span><span class="zh">捕获静默 bug / 脑裂问题</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">The durability gap you must name</span><span class="zh">必须主动点出的持久化缺口</span></span>
+        <p class="en">Redis can lose the counter on an unclean failover. Mitigations: AOF <code>everysec</code>, and — critically — the
+        <strong>DB conditional UPDATE is the real source of truth</strong>; Redis is a fast front gate. If they diverge,
+        the DB wins and reconciliation alerts. Naming this gap unprompted is a strong staff signal.</p>
+        <p class="zh">Redis 在非正常故障切换时可能丢失计数器。缓解措施：AOF <code>everysec</code>，以及——最关键的——<strong>DB 条件更新才是真正的数据权威</strong>；Redis 只是快速前置闸口。若两者出现偏差，以 DB 为准，对账作业触发告警。主动点出这一缺口是强烈的 Staff 级信号。</p>
+      </div>
+
+      <h3><span class="en">⑤ Isolation — protect the other 2 million merchants</span><span class="zh">⑤ 隔离 — 保护其他两百万商家</span></h3>
+      <p class="en">Flash-sale traffic is routed to a <strong>dedicated fleet / queue</strong> (or its own pod, see Q04) with its own rate limits,
+      so a sneaker drop cannot exhaust connection pools or Redis shared by ordinary checkout. The sale has a <strong>kill switch</strong>:
+      circuit-break the sale, never the platform.</p>
+      <p class="zh">秒杀流量被路由到<strong>独立集群 / 队列</strong>（或独立 Pod，参见 Q04），拥有专属速率限制，使一次球鞋秒杀无法耗尽普通结账共用的连接池或 Redis。活动设有<strong>断路开关</strong>：熔断的是本次活动，而不是整个平台。</p>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">需要讨论的权衡取舍</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">建议</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Inventory authority</span><span class="zh">库存权威</span></td>
+            <td><span class="en">Redis counter — µs, not durable</span><span class="zh">Redis 计数器 — 微秒级，不持久</span></td>
+            <td><span class="en">DB row lock — durable, slow under contention (one hot row)</span><span class="zh">DB 行锁 — 持久，竞争时慢（单热点行）</span></td>
+            <td><span class="en"><strong>Both</strong>: Redis gate + DB conditional write as truth</span><span class="zh"><strong>两者兼用</strong>：Redis 闸口 + DB 条件写作为权威</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Fairness model</span><span class="zh">公平性模型</span></td>
+            <td><span class="en">Strict FIFO queue (Stream/Kafka, single consumer)</span><span class="zh">严格 FIFO 队列（Stream/Kafka，单消费者）</span></td>
+            <td><span class="en">Rate-limited admission tokens</span><span class="zh">速率限制入场令牌</span></td>
+            <td><span class="en">Tokens unless strict FIFO is required — FIFO caps throughput &amp; adds latency</span><span class="zh">除非强制要求严格 FIFO，否则用令牌——FIFO 会限制吞吐并增加延迟</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Order of ops</span><span class="zh">操作顺序</span></td>
+            <td><span class="en">Reserve → pay (needs TTL release)</span><span class="zh">先预订再支付（需要 TTL 释放）</span></td>
+            <td><span class="en">Pay → decrement (risk double-sell, refunds)</span><span class="zh">先支付再扣减（有重复销售和退款风险）</span></td>
+            <td><span class="en">Reserve-then-pay + TTL: protects no-oversell, UX of "held for you"</span><span class="zh">先预订再支付 + TTL：保证不超卖，带来"为您保留"的用户体验</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Waiting-room transport</span><span class="zh">等候室传输方式</span></td>
+            <td><span class="en">HTTP polling (simple)</span><span class="zh">HTTP 轮询（简单）</span></td>
+            <td><span class="en">SSE / long-poll (efficient)</span><span class="zh">SSE / 长轮询（高效）</span></td>
+            <td><span class="en">Edge-cached polling for MVP; SSE when poll QPS dominates</span><span class="zh">MVP 用边缘缓存轮询；轮询 QPS 成为主要压力时换 SSE</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Over-admit factor</span><span class="zh">超发系数</span></td>
+            <td><span class="en">Low (1.1×) — safe, may not sell out</span><span class="zh">低（1.1×）— 安全，但可能卖不完</span></td>
+            <td><span class="en">High (3×) — sells out, leans on gate</span><span class="zh">高（3×）— 确保售罄，依赖闸口兜底</span></td>
+            <td><span class="en">Tune to historical abandonment; the gate makes high-admit safe</span><span class="zh">根据历史放弃率调整；闸口使高超发系数安全可行</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问题目</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">Redis dies mid-sale — what happens?</span><span class="zh">Redis 在活动进行中宕机——会发生什么？</span></summary>
+          <div class="faq-body"><p><span class="en">Fail over to a replica (AOF <code>everysec</code> bounds loss to ~1 s of decrements). Because the
+          <strong>DB conditional UPDATE is the true cap</strong>, a slightly-stale Redis counter can only cause extra <em>rejections</em>
+          (it may briefly think stock is lower), never oversell. Reconciliation re-syncs Redis from the DB. Worst case: pause the
+          sale for a few seconds and reload the counter from <code>qty_total − qty_sold</code>.</span><span class="zh">故障切换到副本（AOF <code>everysec</code> 将丢失限制在约 1 秒的自减操作内）。由于 <strong>DB 条件 UPDATE 才是真正的上限</strong>，略微过期的 Redis 计数器只会导致额外的<em>拒绝</em>（它可能短暂认为库存更少），而不会超卖。对账作业负责将 Redis 与 DB 重新同步。最坏情况：暂停活动几秒，然后从 <code>qty_total − qty_sold</code> 重新加载计数器。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you guarantee strict FIFO fairness?</span><span class="zh">如何保证严格的 FIFO 公平性？</span></summary>
+          <div class="faq-body"><p><span class="en">Put joiners on a Redis Stream or a Kafka partition keyed by sale; a single consumer drains in order and
+          admits sequentially. Cost: a single ordered consumer caps admission throughput and adds latency, and one partition can't be
+          parallelized. Only pay this when fairness is a product/legal requirement — otherwise rate-limited tokens are "fair enough".</span><span class="zh">将加入者放入按活动 ID 分区的 Redis Stream 或 Kafka 分区；单消费者按顺序排队并依次放行。代价：单有序消费者会限制入场吞吐并增加延迟，且一个分区无法并行化。只有在公平性是产品或法律要求时才值得付出这个代价——否则速率限制令牌已"足够公平"。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">What about global / multi-region inventory?</span><span class="zh">全球 / 多区域库存怎么处理？</span></summary>
+          <div class="faq-body"><p><span class="en">Two patterns: <strong>(a) partition the cap</strong> — allocate 600 to NA-Redis, 400 to EU-Redis; each region gates locally,
+          true-up async. Simple, but a region can sell out while another has stock. <strong>(b) single global authority</strong> — one
+          region owns the counter, others proxy with low-latency RPC; simpler correctness, worse tail latency + a regional dependency.
+          A CRDT counter is tempting but cannot enforce a <em>hard</em> upper bound, so it's wrong for "never oversell".</span><span class="zh">两种模式：<strong>(a) 分区上限</strong>——将 600 件分配给 NA-Redis、400 件给 EU-Redis；每个区域本地执行闸口，异步对账。简单，但一个区域可能售罄而另一个还有库存。<strong>(b) 单一全局权威</strong>——一个区域持有计数器，其他区域通过低延迟 RPC 代理；正确性更简单，但尾延迟更差且存在区域依赖。CRDT 计数器虽然诱人，但无法强制执行<em>硬性</em>上限，因此不适用于"永不超卖"场景。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you show "remaining count" to a million people without melting Redis?</span><span class="zh">如何向百万用户展示"剩余数量"而不把 Redis 压垮？</span></summary>
+          <div class="faq-body"><p><span class="en">Don't read the live counter per request. Broadcast an <strong>approximate</strong> count: a ticker updates an
+          edge-cached value every 1–2 s (or push over the same SSE channel). Exactness only matters at <code>/reserve</code>, which goes
+          through the gate. "Approximate display, exact at commit" is the consistency split to articulate.</span><span class="zh">不要每次请求都读取实时计数器。广播一个<strong>近似</strong>数量：一个定时器每 1–2 秒更新边缘缓存值（或通过同一 SSE 通道推送）。精确性只在 <code>/reserve</code> 时重要，那里会经过闸口。"展示近似、提交精确"是需要清楚表达的一致性分层设计。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Scalpers and bots are buying everything — what do you add?</span><span class="zh">黄牛和机器人抢购了所有商品——你会增加哪些防护？</span></summary>
+          <div class="faq-body"><p><span class="en">Layered: WAF + per-IP/device caps, account-age and payment-risk checks, proof-of-work or CAPTCHA at <code>/join</code>,
+          and — the strongest product fix — switch the <strong>race to a raffle</strong>: collect entries during a window, draw winners,
+          which removes the speed advantage entirely. Mention that fairness is partly a product decision, not only infra.</span><span class="zh">分层防护：WAF + 每 IP/设备上限、账号注册时间和支付风险检查、在 <code>/join</code> 处加入工作量证明或 CAPTCHA，以及——最强力的产品级修复——将<strong>速度竞争改为抽签</strong>：在时间窗口内收集报名，抽取中签者，彻底消除速度优势。需要指出公平性部分是产品决策，而非纯粹的基础设施问题。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A buyer pays, then cancels / refunds. Inventory?</span><span class="zh">买家支付后取消订单 / 退款，库存如何处理？</span></summary>
+          <div class="faq-body"><p><span class="en">Cancellation emits an event; a handler restores stock (<code>INCRBY</code> + DB <code>qty_sold--</code> under the conditional guard)
+          and frees it for the waiting set if the sale is still open. Reconciliation guards against double-restore. Refund of payment is a
+          separate saga (see Q03).</span><span class="zh">取消操作发出一个事件；处理器在条件保护下恢复库存（<code>INCRBY</code> + DB <code>qty_sold--</code>），若活动仍在进行则将名额归还到等待集合。对账作业防止重复恢复。支付退款是独立的 saga 流程（参见 Q03）。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you stop one user scripting thousands of /join requests to game the queue?</span><span class="zh">如何阻止单个用户用脚本发送数千个 /join 请求来操控队列？</span></summary>
+          <div class="faq-body"><p><span class="en">The first line of defense is the API Gateway / WAF: apply a tight per-IP rate limit (e.g., 5 /join requests per minute) so naive script floods are dropped at the edge before they cost anything. The stronger guarantee is a <strong>signed device token</strong> issued by the client-side page: the token binds the session to a browser fingerprint and is signed with a short-lived key, making it expensive to forge at scale. At the Waiting-Room Service, enforce a <strong>per-identity admission cap</strong> — one ADMITTED token per authenticated user ID — so even if a bot slips through multiple IPs, it cannot hold more than one reservation slot. Combine with account-age and payment-risk signals to raise the cost of fresh fake accounts.</span><span class="zh">第一道防线是 API Gateway / WAF：对每个 IP 设置严格的速率限制（例如每分钟最多 5 次 /join），在流量到达源站之前就将简单的脚本洪流在边缘层拦截，几乎不增加成本。更强的保障是客户端页面签发的<strong>设备签名令牌</strong>：令牌将会话与浏览器指纹绑定，并使用短效密钥签名，使其难以被大规模伪造。在等候室服务层面，对每个认证用户 ID 执行<strong>每身份入场上限</strong>——每个用户只能持有一个 ADMITTED 令牌——这样即使机器人通过多个 IP 绕过了限流，也无法占用超过一个预订名额。结合账号注册时间和支付风险信号可进一步提高创建虚假新账号的成本。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How exactly do you tune the over-admit factor live during the sale?</span><span class="zh">如何在秒杀进行中实时调整超发系数？</span></summary>
+          <div class="faq-body"><p><span class="en">Monitor two real-time signals: <strong>abandonment rate</strong> (admitted users who never call /reserve within their TTL window) and <strong>conversion rate</strong> (reserves that reach PAID). If abandonment is high, increase the admission rate so the pipeline stays full and all stock sells; if conversion is close to 100 % and queue depth is deep, reduce admission to avoid over-admitting and holding buyers in limbo. In practice, expose a knob — <em>admit_rate_per_second</em> — on a config service that the Waiting-Room Service polls every few seconds. The <strong>Redis gate remains the hard safety cap</strong>: it will never let the atomic counter go below zero regardless of how aggressively you admit, so you can tune generously without risking oversell.</span><span class="zh">实时监控两个关键指标：<strong>放弃率</strong>（被放行但在 TTL 窗口内始终未调用 /reserve 的用户比例）和<strong>转化率</strong>（预订成功并最终完成 PAID 的比例）。若放弃率偏高，提升入场速率以填满流水线，确保库存全部卖出；若转化率接近 100% 且队列深度仍很大，则降低入场速率，避免过多用户进入等候后被拒。实际操作中，在配置服务上暴露一个 <em>admit_rate_per_second</em> 参数，等候室服务每隔几秒轮询该值。<strong>Redis gate 始终是硬性安全上限</strong>：无论入场有多激进，原子计数器都不会低于零，因此可以大胆调大入场系数而不必担心超卖。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">An admitted buyer's payment fails — how do you return the unit without losing the sale?</span><span class="zh">已放行买家的支付失败时，如何在不丢失销售机会的情况下归还库存名额？</span></summary>
+          <div class="faq-body"><p><span class="en">The reservation row carries an <code>expires_at</code> timestamp (TTL). If payment fails, the buyer can retry within that window — no immediate release needed. When the TTL fires, the expiry worker explicitly transitions the row to CANCELLED, calls <code>INCRBY sale:{id}:stock 1</code> to restore the Redis slot, and decrements <code>qty_sold</code> in the DB under the same conditional guard. To avoid leaving inventory idle, the Waiting-Room Service can optionally re-admit the next buyer from the queue immediately on an explicit payment failure callback — this requires a lightweight Kafka message or direct call from the Purchase Service. The key invariant is that the <strong>Redis gate protects against double-restore</strong>: the expiry worker and a manual cancel path both hold an idempotency key on the reservation row, so the stock is only restored once.</span><span class="zh">预订行携带 <code>expires_at</code> 时间戳（TTL）。支付失败后，买家可在该窗口内重试——无需立即释放名额。TTL 触发后，到期工作器将该行显式转换为 CANCELLED 状态，执行 <code>INCRBY sale:{id}:stock 1</code> 恢复 Redis 槽位，并在同一条件保护下将 DB 中的 <code>qty_sold</code> 减一。为避免库存名额空置，等候室服务可在收到支付失败的显式回调时立即从队列中再放行下一位买家——这需要从 Purchase Service 发出一条轻量级 Kafka 消息或直接调用。关键不变式在于 <strong>Redis gate 防止重复归还</strong>：到期工作器和手动取消路径均在预订行上持有幂等键，因此库存只会被归还一次。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Walk through one buyer's full timeline from landing to confirmed order.</span><span class="zh">请完整描述一位买家从进入页面到订单确认的全链路时序。</span></summary>
+          <div class="faq-body"><p><span class="en"><strong>① CDN shell</strong> — the buyer's browser fetches the storefront from the CDN edge node; the page is a static shell that loads instantly, absorbing the herd without touching origin. <strong>② /join</strong> — at T0 (or before), client JS fires <code>POST /flash/{saleId}/join</code>; the Waiting-Room Service enqueues the buyer and returns a signed token plus estimated position. <strong>③ Status polling / ADMITTED event</strong> — the client polls <code>GET /status?token=…</code> (or receives an SSE push); when the admission controller meters the buyer in, the response flips to <code>state: ADMITTED</code>. <strong>④ /reserve (the gate)</strong> — client immediately calls <code>POST /reserve</code> with the ADMITTED token; the Purchase Service validates the JWT, runs the Lua script (atomic Redis DECRBY + per-user guard), writes a RESERVED order row, and returns a <code>reservationId</code> and <code>expiresAt</code>. <strong>⑤ /pay</strong> — buyer submits payment details; <code>POST /checkout/{reservationId}/pay</code> authorizes and captures; on success the order row transitions to PAID and an <code>order.paid</code> Kafka event is emitted. <strong>⑥ Confirmation</strong> — async workers send the confirmation email and webhook; the buyer sees the order page.</span><span class="zh"><strong>① CDN shell</strong> — 买家浏览器从 CDN 边缘节点获取店面页面，该页面是静态 shell，秒级加载，吸收大量并发流量而不触达源站。<strong>② /join</strong> — 在 T0 时刻（或之前），客户端 JS 发起 <code>POST /flash/{saleId}/join</code>；等候室服务将买家加入队列，返回签名令牌及预估排队位置。<strong>③ 状态轮询 / ADMITTED 事件</strong> — 客户端轮询 <code>GET /status?token=…</code>（或接收 SSE 推送）；当入场控制器将该买家放行时，响应状态翻转为 <code>state: ADMITTED</code>。<strong>④ /reserve（闸口）</strong> — 客户端立即携带 ADMITTED 令牌调用 <code>POST /reserve</code>；Purchase Service 验证 JWT，执行 Lua 脚本（原子 Redis DECRBY + 每用户限购保护），写入 RESERVED 订单行，返回 <code>reservationId</code> 和 <code>expiresAt</code>。<strong>⑤ /pay</strong> — 买家提交支付信息；<code>POST /checkout/{reservationId}/pay</code> 完成授权和扣款；成功后订单行跳转为 PAID，并发出 <code>order.paid</code> Kafka 事件。<strong>⑥ 确认</strong> — 异步工作器发送确认邮件和 webhook；买家看到订单确认页面。</span></p></div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you rehearse / load-test for the drop, and what do you watch live?</span><span class="zh">如何为秒杀活动进行压测演练，以及活动进行中实时关注哪些指标？</span></summary>
+          <div class="faq-body"><p><span class="en">Run a <strong>game-day drill</strong> at least once before the actual drop: replay a synthetic herd of 1M virtual clients against a production-mirror environment to validate that the CDN absorbs the spike, the gateway rate-limits correctly, and Redis handles the counter without drift. Use a <strong>jittered ramp</strong> rather than a vertical wall to mimic realistic arrival patterns. During the live sale, watch the following dashboards: (1) <strong>admission rate</strong> (buyers/s being flipped to ADMITTED) vs remaining stock — are you admitting at the right cadence? (2) <strong>gate rejects</strong> (SOLD_OUT returns from the Lua script) — a sudden jump means stock exhausted faster than expected; (3) <strong>Redis-vs-DB drift</strong> — the reconciliation job should show zero; any positive number is a bug; (4) <strong>checkout p99 latency</strong> — a spike means the Purchase Service is saturated; (5) <strong>kill-switch readiness</strong> — confirm the circuit-breaker toggle is reachable and tested, so the team can halt the sale in seconds if something goes sideways.</span><span class="zh">在正式活动前至少进行一次<strong>全链路演练（game-day drill）</strong>：向生产镜像环境回放 100 万虚拟客户端的合成流量，验证 CDN 能吸收流量峰值、网关限流配置正确、Redis 计数器处理无误差。使用<strong>抖动式斜坡流量</strong>而非垂直阶跃，以模拟真实用户到达分布。活动进行中实时关注以下看板：(1) <strong>入场速率</strong>（每秒被翻转为 ADMITTED 的买家数）与剩余库存的比值——入场节奏是否合理？(2) <strong>闸口拒绝数</strong>（Lua 脚本返回 SOLD_OUT 的次数）——突然跳升意味着库存比预期耗尽更快；(3) <strong>Redis 与 DB 的漂移量</strong>——对账作业应显示零，任何正数都是 bug；(4) <strong>checkout p99 延迟</strong>——飙升说明 Purchase Service 过饱和；(5) <strong>熔断开关可用性</strong>——确认断路器拨码随时可用且经过测试，以便团队在出现问题时能在数秒内暂停活动。</span></p></div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct">⭐ <span class="en">Staff-level summary — say these four things</span><span class="zh">Staff 级总结 — 必须说出这四点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li class="en"><strong>Shed at the cheapest layer</strong>: kill the herd at the edge; meter a thin stream into a pipeline sized for 1,000 — don't scale checkout 1000×.</li>
+          <li class="zh"><strong>在最廉价的层削减流量</strong>：在边缘层消灭洪峰；将细流精准计量地导入按 1,000 件定尺寸的流水线——不要将结账系统扩容 1000 倍。</li>
+          <li class="en"><strong>Defense in depth on the money invariant</strong>: Redis gate (fast) + DB conditional write (durable truth) + reconciliation (catches drift).</li>
+          <li class="zh"><strong>对核心不变式实施纵深防御</strong>：Redis 闸口（快速）+ DB 条件写（持久化权威）+ 对账（捕获漂移）。</li>
+          <li class="en"><strong>Name the durability gap</strong> of the Redis trick and which store is authoritative.</li>
+          <li class="zh"><strong>主动点出 Redis 方案的持久化缺口</strong>，以及哪个存储是权威数据源。</li>
+          <li class="en"><strong>Protect the platform</strong>: isolate the sale (dedicated fleet/pod + kill switch) so one merchant's drop can't hurt two million others.</li>
+          <li class="zh"><strong>保护平台</strong>：隔离活动（独立集群/Pod + 断路开关），使单个商家的秒杀活动不能影响其他两百万商家。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2>Sources</h2></div>
+      <ul class="sources">
+        <li><a href="https://www.techinterview.org/post/3233464757/lld-flash-sale-system/">techinterview.org — Flash Sale system: inventory lock, queue-based checkout, oversell prevention</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify flash-sale &amp; virtual waiting room patterns</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (traffic-spike handling)</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="index.html">← Back to all questions</a> &nbsp;·&nbsp; <a href="02_inventory_management.html">Next: 02 · Global Inventory Management →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

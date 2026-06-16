@@ -1,0 +1,1093 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>05 · Shopping Cart Service — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 05 · Shopping Cart</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="04_multi_tenant_sharding.html"><span class="n">←</span> 04 Multi-tenant</a>
+    <a href="06_product_search.html"><span class="n">→</span> 06 Search</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 2 · Core platform · ★★★★☆</div>
+      <h1><span class="en">Design a Shopping Cart Service</span><span class="zh">设计购物车服务</span></h1>
+      <p><span class="en">Carts for both <strong>logged-in and anonymous buyers</strong>, merged on login, consistent across devices, and
+      <strong>always available during traffic spikes</strong>. A cart that errors is an abandoned sale — availability beats
+      strict consistency here, and inventory is never held in the cart.</span><span class="zh">支持<strong>已登录用户与匿名用户</strong>的购物车，登录时自动合并，跨设备保持一致，并在流量峰值时<strong>始终保持可用</strong>。购物车出错即意味着丢失订单——这里可用性优先于强一致性，且库存不在购物车层预占。</span></p>
+      <div class="meta">
+        <span class="chip">AP-leaning KV service</span>
+        <span class="chip">Anonymous + authenticated identity</span>
+        <span class="chip">Merge-on-login</span>
+        <span class="chip">⏱ 45–60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question matters</span><span class="zh">为什么这道题很重要</span></span>
+      <span class="en">The shopping cart is deceptively simple — it looks like a CRUD toy — but the interesting design space is
+      <strong>identity (anonymous vs authenticated), availability under BFCM spikes, cross-device consistency,
+      merge semantics, and the critical insight that carts must NOT reserve inventory</strong>. Getting those four
+      things right in 45 minutes separates senior from staff.</span><span class="zh">购物车看似简单——像一个 CRUD 玩具——但真正有趣的设计空间在于<strong>身份识别（匿名 vs 已登录）、BFCM 峰值下的可用性、跨设备一致性、合并语义，以及购物车绝不应预占库存这一关键洞察</strong>。在 45 分钟内把这四点讲清楚，是区分 Senior 与 Staff 的关键。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 主动提问，勿自行假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Add, update quantity, and remove line items; view the full cart.</span><span class="zh">添加、更新数量、删除行条目；查看完整购物车。</span></li>
+            <li><span class="en">Persist carts for <strong>anonymous users</strong> (cookie/session-keyed) and logged-in users.</span><span class="zh">持久化<strong>匿名用户</strong>（以 cookie/session 为键）和已登录用户的购物车。</span></li>
+            <li><span class="en"><strong>Merge</strong> the anonymous cart into the user's cart on login.</span><span class="zh">登录时将匿名购物车<strong>合并</strong>到用户账户购物车。</span></li>
+            <li><span class="en">Display price and basic availability per line item.</span><span class="zh">展示每个行条目的价格和基本库存状态。</span></li>
+            <li><span class="en">Cart feeds into the checkout flow; checkout validates price and stock.</span><span class="zh">购物车对接结账流程；结账时验证价格和库存。</span></li>
+            <li><span class="en">Per-shop (multi-tenant) scoping: cart_id is always shop-namespaced.</span><span class="zh">按店铺（多租户）隔离：cart_id 始终包含 shop 命名空间。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>High availability</strong> — AP-leaning; a degraded cart is better than no cart.</span><span class="zh"><strong>高可用</strong>——偏向 AP；降级的购物车好过不可用的购物车。</span></li>
+            <li><span class="en">Low latency reads and writes; single-digit ms p99 for add-to-cart.</span><span class="zh">低延迟读写；加购操作 p99 延迟为个位数毫秒。</span></li>
+            <li><span class="en"><strong>Cross-device sync</strong> for logged-in users (eventual, LWW acceptable).</span><span class="zh">已登录用户的<strong>跨设备同步</strong>（最终一致性，LWW 可接受）。</span></li>
+            <li><span class="en">TTL / expiry: ~30 days for authenticated, hours for anonymous.</span><span class="zh">TTL / 过期：已登录约 30 天，匿名为数小时。</span></li>
+            <li><span class="en">Scale to tens of millions of active carts; handles BFCM spikes.</span><span class="zh">支持数千万个活跃购物车规模；能承受 BFCM 峰值流量。</span></li>
+            <li><span class="en">No inventory reservation in the cart at platform scale.</span><span class="zh">平台规模下购物车不预占库存。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to ask out loud</span><span class="zh">应主动提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Do we need to support <strong>anonymous carts</strong>? If so, are they cookie-based or server-side?</span><span class="zh">是否需要支持<strong>匿名购物车</strong>？如需支持，是基于 cookie 还是服务端存储？</span></li>
+          <li><span class="en">Is <strong>cross-device sync</strong> required for logged-in users? (Changes the consistency model.)</span><span class="zh">已登录用户是否需要<strong>跨设备同步</strong>？（会影响一致性模型的选择。）</span></li>
+          <li><span class="en">What is the <strong>cart TTL</strong>? Who purges expired carts?</span><span class="zh"><strong>购物车 TTL</strong> 是多少？由谁清理过期购物车？</span></li>
+          <li><span class="en">Maximum items per cart? Any per-variant quantity cap?</span><span class="zh">购物车最多允许多少件商品？每个变体是否有数量上限？</span></li>
+          <li><span class="en">Do we <strong>reserve inventory</strong> in the cart or validate only at checkout?  <em>(Answer: validate at checkout — this is the key insight.)</em></span><span class="zh">购物车是否<strong>预占库存</strong>，还是仅在结账时验证？<em>（答案：仅在结账时验证——这是核心洞察。）</em></span></li>
+          <li><span class="en">Is the <strong>price locked</strong> at add-time or re-fetched at checkout?</span><span class="zh"><strong>价格是否在加购时锁定</strong>，还是在结账时重新获取？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找到真正的瓶颈</span></span></div>
+      <p><span class="en">The cart is <strong>high-write, single-key accessed, and ephemeral</strong>. The key bottleneck is
+      sustained write throughput across millions of carts, not any single hot key (unlike flash sale). During BFCM,
+      add-to-cart spikes 20–50× baseline.</span><span class="zh">购物车是<strong>高写入、单键访问、短暂存储</strong>的服务。核心瓶颈是跨数百万购物车的持续写入吞吐量，而非单个热点键（与秒杀不同）。BFCM 期间，加购请求峰值达到基线的 20–50 倍。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">50M</div><div class="l"><span class="en">active carts (peak)</span><span class="zh">活跃购物车（峰值）</span></div></div>
+        <div class="kpi"><div class="v">~50k</div><div class="l"><span class="en">add/update QPS (BFCM peak)</span><span class="zh">加购/更新 QPS（BFCM 峰值）</span></div></div>
+        <div class="kpi"><div class="v">~150k</div><div class="l"><span class="en">read QPS (3× writes)</span><span class="zh">读取 QPS（写入的 3 倍）</span></div></div>
+        <div class="kpi"><div class="v">~5</div><div class="l"><span class="en">avg line items / cart</span><span class="zh">平均行条目数 / 购物车</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en"><strong>Storage per cart</strong>: ~1 KB (header + 5 line items serialized). 50M × 1 KB = ~50 GB hot data. Comfortably fits in a mid-size Redis cluster or a single DynamoDB table.</span><span class="zh"><strong>单个购物车存储</strong>：约 1 KB（头信息 + 5 个行条目序列化）。50M × 1 KB ≈ 50 GB 热数据，轻松放入中型 Redis 集群或单张 DynamoDB 表。</span></li>
+        <li><span class="en"><strong>Write throughput</strong>: 50k writes/s is moderate for Redis (a single instance handles ~100k+ ops/s on discrete round-trips). DynamoDB on-demand autoscales without pre-provisioning.</span><span class="zh"><strong>写吞吐量</strong>：50k 写/秒对 Redis 来说是中等负载（单实例可处理约 100k+ ops/s 的离散请求）。DynamoDB 按需模式无需预置即可自动扩容。</span></li>
+        <li><span class="en"><strong>Read throughput</strong>: Cart reads dominate on the storefront. Reads hit the same KV store key; a cart document is read in one round-trip — no joins.</span><span class="zh"><strong>读吞吐量</strong>：购物车读取在店面占主导地位。读取命中同一 KV 键；一次购物车文档读取仅需一次往返——无需联表。</span></li>
+        <li><span class="en"><strong>Abandoned cart events</strong>: ~15–25% of carts are abandoned. At 50M active carts and a 30-day TTL, ~1,200 carts expire per minute on average — manageable async workload.</span><span class="zh"><strong>废弃购物车事件</strong>：约 15–25% 的购物车会被废弃。在 50M 活跃购物车和 30 天 TTL 下，平均每分钟约有 1,200 个购物车过期——异步负载可控。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">The key insight: <em>"The cart is not money-critical. It's ephemeral, key-accessed, and should lean AP.
+        The correct storage primitive is a single-document KV store, not a normalized RDBMS.
+        Inventory is never held here — we validate at checkout."</em></span><span class="zh">核心洞察：<em>"购物车不是金融关键系统。它是短暂的、按键访问的，应该偏向 AP。正确的存储原语是单文档 KV store，而不是规范化的 RDBMS。库存绝不在购物车层持有——我们在结账时验证。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <p><span class="en">All endpoints accept an <code>X-Shop-Domain</code> header for multi-tenant routing. Anonymous callers present a
+      <strong>signed cart token</strong> in the cookie; authenticated callers present a session/OAuth bearer token, and the
+      Cart Service resolves their canonical cart_id server-side.</span><span class="zh">所有接口均接受 <code>X-Shop-Domain</code> 请求头用于多租户路由。匿名调用方在 cookie 中携带<strong>签名购物车令牌</strong>；已认证调用方携带 session/OAuth Bearer token，Cart Service 在服务端解析其规范 cart_id。</span></p>
+      <div class="api">
+        <div class="row"><span class="method get">GET</span><span class="path">/cart</span><span class="desc">returns the full cart document (header + line items)</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/cart/items</span><span class="desc">{variantId, qty} → adds or increments a line item</span></div>
+        <div class="row"><span class="method put">PUT</span><span class="path">/cart/items/{lineId}</span><span class="desc">{qty} → sets absolute quantity (0 = delete)</span></div>
+        <div class="row"><span class="method del">DEL</span><span class="path">/cart/items/{lineId}</span><span class="desc">removes a specific line item</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/cart/merge</span><span class="desc">{anonymousCartToken} → merges anon cart into the authenticated user's cart</span></div>
+      </div>
+      <p><span class="en">Mutations return the updated cart document so the client does not need a follow-up GET. The
+      <code>/cart/merge</code> endpoint is called immediately after login completes, before the user sees the cart page.
+      All mutation endpoints are <strong>idempotent</strong>: callers supply a client-generated <code>Idempotency-Key</code>
+      header to safely retry on network errors without duplicating items.</span><span class="zh">变更操作返回最新购物车文档，客户端无需再发起额外的 GET 请求。<code>/cart/merge</code> 接口在登录完成后、用户看到购物车页面前立即调用。所有变更接口均为<strong>幂等</strong>：调用方提供客户端生成的 <code>Idempotency-Key</code> 请求头，以便在网络错误时安全重试而不重复添加商品。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Logical schema (stored as one document per cart)</span><span class="zh">逻辑结构（每个购物车存为一个文档）</span></h4>
+      <pre><code><span class="c">-- cart header (document key = cart_id)</span>
+<span class="k">cart</span>(
+  cart_id        UUID PK,            <span class="c">-- e.g. "cart_abc123"</span>
+  shop_id        VARCHAR,            <span class="c">-- multi-tenant namespace</span>
+  owner_type     ENUM(user, session),<span class="c">-- logged-in vs anonymous</span>
+  owner_id       VARCHAR,            <span class="c">-- user_id or session token hash</span>
+  status         ENUM(active, merged, expired, converted),
+  updated_at     TIMESTAMP,
+  ttl            TIMESTAMP,          <span class="c">-- 30d (authed) or 4h (anon)</span>
+  version        INT                 <span class="c">-- optimistic concurrency counter</span>
+)
+
+<span class="c">-- line items (embedded inside cart document)</span>
+<span class="k">cart_line</span>(
+  line_id        UUID,
+  cart_id        UUID FK,
+  variant_id     VARCHAR,
+  qty            INT CHECK(qty &gt; 0),
+  price_at_add   DECIMAL(10,2),      <span class="c">-- snapshot for display; re-validated at checkout</span>
+  added_at       TIMESTAMP
+)</code></pre>
+      <h4><span class="en">Physical storage layout</span><span class="zh">物理存储布局</span></h4>
+      <pre><code><span class="c">-- KV store key pattern (Redis / DynamoDB)</span>
+<span class="n">cart:{shop_id}:{cart_id}</span>   <span class="c">// whole document as JSON blob — one key per cart</span>
+<span class="n">user_cart:{shop_id}:{user_id}</span>  <span class="c">// index: maps user_id → cart_id (for cross-device)</span>
+<span class="n">session_cart:{session_token_hash}</span>  <span class="c">// anonymous carts, short TTL</span></code></pre>
+      <p><span class="en">The entire cart (header + all line items) is stored as a <strong>single document</strong> under one key. Every cart read
+      is a single-key GET, every mutation is a single-key PUT. There are no joins, no secondary indices on the hot path.
+      The <code>version</code> field enables optimistic concurrency for concurrent device writes.</span><span class="zh">整个购物车（头信息 + 所有行条目）以<strong>单一文档</strong>存储在一个键下。每次购物车读取都是单键 GET，每次变更都是单键 PUT。热路径上无需联表，无需二级索引。<code>version</code> 字段支持跨设备并发写入时的乐观并发控制。</span></p>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">three flows drawn separately</span><span class="zh">三条数据流分开绘制</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- Request spine: client → edge → cart svc -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="360" y1="64" x2="360" y2="92"/>
+            <line x1="360" y1="142" x2="360" y2="174"/>
+            <line x1="360" y1="226" x2="360" y2="262"/>
+          </g>
+
+          <!-- Cart Svc → KV store (reads/writes) -->
+          <g stroke="#7c3aed" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="265" y1="300" x2="220" y2="300"/>
+            <line x1="220" y1="318" x2="265" y2="318"/>
+          </g>
+
+          <!-- Cart Svc → user_cart index (right) -->
+          <g stroke="#7c3aed" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="455" y1="295" x2="558" y2="295"/>
+          </g>
+
+          <!-- Cart Svc → Kafka (event emit) -->
+          <g stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ahd)">
+            <line x1="455" y1="318" x2="560" y2="380"/>
+          </g>
+
+          <!-- Kafka → workers -->
+          <g stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ahd)">
+            <line x1="650" y1="412" x2="650" y2="446"/>
+          </g>
+
+          <!-- Merge worker reads anon KV, writes user KV (dashed) -->
+          <path d="M130,446 L130,310 L80,310" stroke="#ea580c" stroke-width="1.4"
+                stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)"/>
+          <text x="30" y="332" font-size="10" fill="#ea580c">merge:</text>
+          <text x="30" y="345" font-size="10" fill="#ea580c">reads anon</text>
+          <text x="30" y="358" font-size="10" fill="#ea580c">key, writes</text>
+          <text x="30" y="371" font-size="10" fill="#ea580c">user key</text>
+
+          <!-- Checkout calls Cart Svc for read-then-validate (dashed) -->
+          <path d="M620,226 L620,162 L455,162" stroke="#2563eb" stroke-width="1.3"
+                stroke-dasharray="4 4" fill="none" marker-end="url(#ah)"/>
+          <text x="530" y="154" font-size="10" fill="#2563eb" text-anchor="middle">checkout reads cart</text>
+
+          <!-- Client node -->
+          <g>
+            <rect x="265" y="16" width="190" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="360" y="38" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Buyer (web / mobile)</text>
+            <text x="360" y="54" text-anchor="middle" font-size="10.5" fill="#64748b">signed cart cookie (anon) or session token</text>
+          </g>
+
+          <!-- Edge / API Gateway -->
+          <g>
+            <rect x="265" y="92" width="190" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="360" y="113" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">API Gateway</text>
+            <text x="360" y="130" text-anchor="middle" font-size="10.5" fill="#2563eb">auth resolution · per-shop routing</text>
+          </g>
+
+          <!-- Checkout Service (top-right) -->
+          <g>
+            <rect x="558" y="140" width="188" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="652" y="161" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Checkout Service</text>
+            <text x="652" y="178" text-anchor="middle" font-size="10.5" fill="#008060">re-validates price + stock at order</text>
+          </g>
+
+          <!-- Cart Service -->
+          <g>
+            <rect x="265" y="174" width="190" height="52" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="360" y="196" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Cart Service (stateless)</text>
+            <text x="360" y="213" text-anchor="middle" font-size="10.5" fill="#008060">add · update · remove · merge</text>
+          </g>
+
+          <!-- KV Store (Redis + DynamoDB backing) -->
+          <g>
+            <rect x="80" y="262" width="185" height="70" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="173" y="284" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">KV Store</text>
+            <text x="173" y="300" text-anchor="middle" font-size="10.5" fill="#dc2626">Redis (hot) + DynamoDB</text>
+            <text x="173" y="316" text-anchor="middle" font-size="10.5" fill="#dc2626">(durable backing)</text>
+          </g>
+
+          <!-- User cart index -->
+          <g>
+            <rect x="558" y="264" width="188" height="52" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="652" y="285" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">User→Cart Index</text>
+            <text x="652" y="302" text-anchor="middle" font-size="10.5" fill="#7c3aed">user_id → cart_id mapping</text>
+          </g>
+
+          <!-- Kafka -->
+          <g>
+            <rect x="558" y="356" width="188" height="56" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="652" y="378" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka</text>
+            <text x="652" y="395" text-anchor="middle" font-size="10.5" fill="#ea580c">cart.updated · cart.abandoned</text>
+          </g>
+
+          <!-- Async workers -->
+          <g>
+            <rect x="558" y="446" width="188" height="60" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="652" y="468" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Async Workers</text>
+            <text x="652" y="484" text-anchor="middle" font-size="10" fill="#008060">TTL expiry · abandonment emails</text>
+            <text x="652" y="498" text-anchor="middle" font-size="10" fill="#008060">merge jobs · analytics</text>
+          </g>
+
+          <!-- inline labels -->
+          <text x="240" y="303" font-size="10" fill="#7c3aed" text-anchor="end">read/write cart doc</text>
+          <text x="510" y="278" font-size="10" fill="#7c3aed">update index</text>
+          <text x="520" y="358" font-size="10" fill="#ea580c">emit event</text>
+        </svg>
+
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache (Redis/KV)</span>
+          <span><i style="background:#7c3aed"></i> datastore / index</span>
+          <span><i style="background:#ea580c"></i> async / queue</span>
+        </div>
+        <div class="cap"><span class="en">Request flow (spine) · data flow (to KV store and index) · event flow (Kafka → workers) drawn separately. Dashed blue = Checkout Service reading cart at order time.</span><span class="zh">请求流（主干）· 数据流（至 KV store 和索引）· 事件流（Kafka → Workers）分开绘制。蓝色虚线 = 结账服务在下单时读取购物车。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件说明</span></h4>
+      <ul>
+        <li><span class="en"><strong>API Gateway</strong> — resolves anonymous vs authenticated identity; routes by shop. Anonymous requests carry a signed cart token in the cookie; authenticated requests carry a bearer token the gateway exchanges for a user_id before forwarding.</span><span class="zh"><strong>API Gateway</strong> — 区分匿名与已认证身份，按店铺路由。匿名请求在 cookie 中携带签名购物车令牌；已认证请求携带 Bearer token，Gateway 将其换取 user_id 后再转发。</span></li>
+        <li><span class="en"><strong>Cart Service</strong> — stateless; reads and writes a single cart document per request. No session affinity needed. Horizontally scalable; deploy behind a load balancer.</span><span class="zh"><strong>Cart Service</strong> — 无状态；每个请求读写单个购物车文档。无需会话粘性，可水平扩展，部署在负载均衡器后。</span></li>
+        <li><span class="en"><strong>KV Store (Redis + DynamoDB)</strong> — Redis serves the hot path with sub-millisecond latency; DynamoDB (or RDS with durability requirements) provides durable backing. The whole cart is one document under one key — no joins, no scans.</span><span class="zh"><strong>KV Store（Redis + DynamoDB）</strong> — Redis 以亚毫秒延迟服务热路径；DynamoDB（或有持久化要求时用 RDS）提供持久化存储。整个购物车以单文档存于一个键下——无需联表，无需全表扫描。</span></li>
+        <li><span class="en"><strong>User→Cart Index</strong> — a secondary KV mapping from <code>user_id</code> to <code>cart_id</code>, enabling cross-device cart resolution. Stored in DynamoDB for durability; updated transactionally with cart creation.</span><span class="zh"><strong>用户→购物车索引</strong> — 从 <code>user_id</code> 到 <code>cart_id</code> 的辅助 KV 映射，支持跨设备购物车解析。存储在 DynamoDB 中以保证持久性，与购物车创建事务性地同步更新。</span></li>
+        <li><span class="en"><strong>Checkout Service</strong> — consumes the cart document but does NOT trust the stored prices or stock flags. It re-validates both against the live catalog and inventory at order time.</span><span class="zh"><strong>Checkout Service</strong> — 消费购物车文档，但<strong>不信任</strong>其中存储的价格或库存标志。在下单时重新对照实时商品目录和库存服务进行验证。</span></li>
+        <li><span class="en"><strong>Kafka + Workers</strong> — the Cart Service emits <code>cart.updated</code> and <code>cart.abandoned</code> events. Workers handle TTL expiry, send abandonment recovery emails, run the merge flow, and feed analytics.</span><span class="zh"><strong>Kafka + Workers</strong> — Cart Service 发送 <code>cart.updated</code> 和 <code>cart.abandoned</code> 事件。Workers 处理 TTL 过期、发送废弃购物车召回邮件、执行合并流程并输送分析数据。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度剖析</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在之处</span></span></div>
+
+      <h3><span class="en">① Identity &amp; merge — anonymous to authenticated</span><span class="zh">① 身份识别与合并——从匿名到已认证</span></h3>
+      <p><span class="en">An anonymous cart is created on first add-to-cart and keyed by a <strong>signed, opaque token</strong> stored in a
+      browser cookie (HttpOnly, SameSite=Lax, short TTL). The token is signed with an HMAC key so the Cart Service can
+      verify it without a database lookup on the authentication path. On login, the client sends
+      <code>POST /cart/merge {anonymousCartToken}</code>. The merge logic runs in the Cart Service (or a worker):</span><span class="zh">匿名购物车在首次加购时创建，以存储在浏览器 cookie（HttpOnly、SameSite=Lax、短 TTL）中的<strong>签名不透明令牌</strong>为键。令牌使用 HMAC 密钥签名，使 Cart Service 无需数据库查询即可在认证路径上完成验证。登录时，客户端发送 <code>POST /cart/merge {anonymousCartToken}</code>，合并逻辑在 Cart Service（或 Worker）中执行：</span></p>
+      <pre><code><span class="c">// Pseudocode: merge anonymous cart into user cart</span>
+<span class="k">function</span> mergeCart(userCartId, anonCartId):
+  anonCart = kv.get(anonCartId)
+  userCart = kv.get(userCartId)
+
+  <span class="k">for</span> anonLine <span class="k">in</span> anonCart.lines:
+    existing = userCart.findByVariant(anonLine.variantId)
+    <span class="k">if</span> existing:
+      <span class="c">// sum quantities, cap at per-variant limit</span>
+      existing.qty = min(existing.qty + anonLine.qty, MAX_QTY_PER_VARIANT)
+      <span class="c">// keep the user cart's price_at_add (it's the older / verified one)</span>
+    <span class="k">else</span>:
+      userCart.lines.append(anonLine)  <span class="c">// new item from anon cart</span>
+
+  userCart.updated_at = now()
+  kv.put(userCartId, userCart)
+  kv.del(anonCartId)          <span class="c">// mark merged / delete anon cart</span>
+  emitEvent(<span class="s">"cart.merged"</span>, {userCartId, anonCartId})</code></pre>
+      <p><span class="en">Conflict rules: same variant in both carts → sum and cap; price conflict → retain the user cart's
+      <code>price_at_add</code> (re-validated at checkout anyway); new variants from anon cart → appended. The merge is
+      idempotent — re-running on a stale retry produces the same result because the anon cart token is deleted after
+      first success.</span><span class="zh">冲突规则：两个购物车中有相同变体 → 累加数量并取上限；价格冲突 → 保留用户购物车的 <code>price_at_add</code>（无论如何都会在结账时重新验证）；匿名购物车中的新变体 → 追加。该合并是幂等的——因为匿名购物车令牌在首次成功后即被删除，重复执行陈旧的重试请求会产生相同结果。</span></p>
+
+      <h3><span class="en">② Storage choice — why KV beats a normalized RDBMS</span><span class="zh">② 存储选型——为何 KV 优于规范化 RDBMS</span></h3>
+      <p><span class="en">A shopping cart has a simple, predictable access pattern: <strong>always accessed by its primary key</strong>
+      (cart_id or user_id → cart_id). There are no ad-hoc queries, no aggregations, no foreign-key joins on the hot path.
+      This makes a normalized SQL schema actively harmful — it would require a JOIN on every cart read.</span><span class="zh">购物车的访问模式简单且可预测：<strong>始终通过主键访问</strong>（cart_id 或 user_id → cart_id）。热路径上没有临时查询、聚合或外键联表。这使得规范化 SQL 结构适得其反——每次购物车读取都需要 JOIN。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Storage</span><span class="zh">存储方案</span></th><th><span class="en">Strengths</span><span class="zh">优势</span></th><th><span class="en">Weaknesses</span><span class="zh">劣势</span></th><th><span class="en">When to pick</span><span class="zh">适用场景</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Redis (whole-doc)</td>
+            <td><span class="en">Sub-ms; simple GET/SET; atomic Lua scripts; TTL native</span><span class="zh">亚毫秒延迟；GET/SET 简单；Lua 原子脚本；原生 TTL</span></td>
+            <td><span class="en">Durability risk (AOF gap); memory-bound; no secondary index</span><span class="zh">持久化风险（AOF 间隙）；受内存限制；无二级索引</span></td>
+            <td><span class="en">Hot path; caches up to 50 GB of active carts easily</span><span class="zh">热路径；轻松缓存约 50 GB 活跃购物车数据</span></td>
+          </tr>
+          <tr>
+            <td>DynamoDB</td>
+            <td><span class="en">Fully managed; autoscale; native TTL; durable; single-digit ms</span><span class="zh">全托管；自动扩容；原生 TTL；持久化；个位数毫秒延迟</span></td>
+            <td><span class="en">More expensive than Redis for pure caching; no server-side scripting</span><span class="zh">纯缓存场景成本高于 Redis；无服务端脚本</span></td>
+            <td><span class="en">Durable KV without ops overhead; good default for cart at Shopify scale</span><span class="zh">无运维负担的持久化 KV；Shopify 规模下的购物车首选</span></td>
+          </tr>
+          <tr>
+            <td>PostgreSQL / MySQL</td>
+            <td><span class="en">Full ACID; rich queries; familiar tooling</span><span class="zh">完整 ACID；丰富查询；工具链熟悉</span></td>
+            <td><span class="en">Normalized rows = JOIN on every read; can't TTL natively; over-engineered for KV</span><span class="zh">规范化行 = 每次读取都需 JOIN；不支持原生 TTL；对 KV 场景过度设计</span></td>
+            <td><span class="en">Only if the cart grows complex (wishlists, saved-for-later) requiring SQL queries</span><span class="zh">仅当购物车扩展为复杂功能（心愿单、稍后购买）且需要 SQL 查询时</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Recommended pattern</span><span class="zh">推荐方案</span></span>
+        <span class="en">Use <strong>Redis for the hot path</strong> (sub-ms reads, native TTL, simple ops) with <strong>DynamoDB as the durable
+        source of truth</strong>. Write-through: every mutation writes to DynamoDB first, then refreshes the Redis key.
+        On a Redis miss, fall through to DynamoDB and back-fill. This gives the speed of a cache with the durability of a
+        document store.</span><span class="zh">热路径使用 <strong>Redis</strong>（亚毫秒读取、原生 TTL、操作简单），以 <strong>DynamoDB 作为持久化的权威数据源</strong>。写透模式：每次变更先写入 DynamoDB，再刷新 Redis 键。Redis 未命中时降级到 DynamoDB 并回填。兼顾了缓存的速度与文档存储的持久性。</span>
+      </div>
+
+      <h3><span class="en">③ Cross-device consistency — LWW vs versioned</span><span class="zh">③ 跨设备一致性——LWW vs 版本控制</span></h3>
+      <p><span class="en">For logged-in users, two devices can mutate the cart concurrently (e.g., laptop adds item while mobile removes one).
+      The cart document has a <code>version</code> integer incremented on every write. Two strategies:</span><span class="zh">对于已登录用户，两台设备可能并发修改购物车（如笔记本添加商品，同时手机删除商品）。购物车文档有一个 <code>version</code> 整数，每次写入时递增。有两种策略：</span></p>
+      <ul>
+        <li><span class="en"><strong>Last-Write-Wins (LWW)</strong> — whichever write arrives last overwrites the document. Simple to implement;
+        acceptable for most carts because the stakes are low. Risk: a slow device can silently undo a recent mutation from a
+        faster device. Mitigate by refreshing the local cart state after every mutation (the server returns the canonical doc).</span><span class="zh"><strong>最后写入获胜（LWW）</strong>——最后到达的写入覆盖文档。实现简单；对大多数购物车可接受，因为风险较低。风险：慢设备可能悄悄撤销快设备的最新变更。缓解方法：每次变更后刷新本地购物车状态（服务端返回权威文档）。</span></li>
+        <li><span class="en"><strong>Optimistic Concurrency (OCC)</strong> — client sends the <code>version</code> it last saw; server rejects
+        with <code>409 Conflict</code> if the stored version is higher. Client re-fetches and re-applies its mutation. Correct
+        but adds a retry round-trip. Worth enabling for high-value shops or when the team reports lost-item complaints.</span><span class="zh"><strong>乐观并发控制（OCC）</strong>——客户端发送其最后看到的 <code>version</code>；若存储版本更高，服务端拒绝并返回 <code>409 Conflict</code>。客户端重新获取并重放变更。结果正确，但增加了一次重试往返。适用于高价值店铺或团队收到丢失商品投诉时。</span></li>
+      </ul>
+      <p><span class="en">At Shopify scale, <strong>LWW is the right default</strong> — a lost cart item is annoying but not catastrophic,
+      and the client always receives the current doc after each write. Reserve OCC for explicit requirements.</span><span class="zh">在 Shopify 规模下，<strong>LWW 是正确的默认选择</strong>——丢失一个购物车商品令人恼火，但并非灾难性的，且每次写入后客户端总能收到最新文档。仅在有明确需求时才启用 OCC。</span></p>
+
+      <h3><span class="en">④ Price &amp; inventory correctness — never hold stock in the cart</span><span class="zh">④ 价格与库存正确性——购物车中永不持有库存</span></h3>
+      <p><span class="en">The <code>price_at_add</code> field is stored purely for <strong>display purposes</strong> — so the buyer sees the
+      price they saw when they added the item. It is NOT authoritative. Both price and stock are <strong>re-validated at
+      checkout</strong> against the live catalog and inventory service. This is a deliberate product decision:</span><span class="zh"><code>price_at_add</code> 字段纯粹用于<strong>展示目的</strong>——让买家看到加购时的价格。它不具备权威性。价格和库存均在<strong>结账时</strong>对照实时商品目录和库存服务重新验证。这是一个有意为之的产品决策：</span></p>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Never treat the cart as an inventory reservation</span><span class="zh">永远不要将购物车视为库存预占</span></span>
+        <span class="en">Holding inventory in the cart at platform scale would mean locking stock for 30 days for tens of millions of
+        potentially abandoned carts. That would kill merchant availability — a merchant with 100 units in stock could
+        see all 100 "locked" by abandoned carts, making the product appear sold-out to real buyers. The correct model:
+        <strong>carts are soft — inventory is only committed at checkout</strong>. If an item goes out of stock between add and
+        checkout, the checkout service surfaces the error and asks the buyer to remove it. This is expected UX, not a bug.</span><span class="zh">在平台规模下将库存锁定在购物车中，意味着要为数千万个可能被废弃的购物车锁定库存长达 30 天。这将扼杀商家的可用性——一个拥有 100 件库存的商家，可能看到全部 100 件被废弃购物车"锁定"，导致商品对真实买家显示为缺货。正确模型：<strong>购物车是软状态——库存仅在结账时才提交</strong>。若某商品在加购到结账之间售罄，结账服务会提示错误并要求买家移除该商品。这是预期的用户体验，而非 Bug。</span>
+      </div>
+      <p><span class="en">At checkout time: (1) re-fetch current prices from the Product/Pricing service; (2) check available inventory from
+      the Inventory service; (3) show a diff to the buyer if anything changed; (4) only then decrement inventory atomically.
+      The cart document's <code>price_at_add</code> is used only to highlight price increases to the buyer.</span><span class="zh">结账时：(1) 从商品/定价服务重新获取当前价格；(2) 从库存服务检查可用库存；(3) 若有任何变化则向买家展示差异；(4) 仅在此时才原子性地扣减库存。购物车文档中的 <code>price_at_add</code> 仅用于向买家高亮显示价格上涨。</span></p>
+
+      <h3><span class="en">⑤ Availability during spikes &amp; abandoned cart recovery</span><span class="zh">⑤ 峰值期间的可用性与废弃购物车召回</span></h3>
+      <p><span class="en">Because the cart is AP, it must degrade gracefully. During a BFCM spike:</span><span class="zh">因为购物车是 AP 系统，它必须能优雅降级。在 BFCM 峰值期间：</span></p>
+      <ul>
+        <li><span class="en"><strong>Read-your-own-writes</strong>: route each user's reads to the same primary/partition owner using consistent hashing on
+        cart_id. This ensures a user sees their own add-to-cart immediately without requiring synchronous replication.</span><span class="zh"><strong>读己所写</strong>：使用基于 cart_id 的一致性哈希，将每个用户的读请求路由到同一主节点/分区。这确保用户能立即看到自己的加购操作，无需同步复制。</span></li>
+        <li><span class="en"><strong>Circuit breaker</strong>: if the KV store is degraded, the Cart Service can return a cached
+        (potentially stale) cart document and queue the write for retry, rather than failing the request. A cart with a
+        slightly stale view beats a 500 error.</span><span class="zh"><strong>熔断器</strong>：如果 KV store 降级，Cart Service 可返回缓存的（可能过时的）购物车文档并将写操作入队重试，而非让请求失败。略微过时的购物车视图远好于 500 错误。</span></li>
+        <li><span class="en"><strong>TTL expiry</strong>: DynamoDB and Redis both support native TTL. Expired carts are deleted automatically.
+        Before deletion, a TTL watcher job emits a <code>cart.abandoned</code> event.</span><span class="zh"><strong>TTL 过期</strong>：DynamoDB 和 Redis 均支持原生 TTL。过期购物车自动删除。删除前，TTL 监听任务发送 <code>cart.abandoned</code> 事件。</span></li>
+        <li><span class="en"><strong>Abandoned cart recovery</strong>: the <code>cart.abandoned</code> Kafka event triggers the marketing
+        automation pipeline — an email or push notification is sent ~1 hour after the last activity. The cart document
+        is kept long enough (up to 7 days post-abandonment) to allow recovery link click-throughs to restore the cart.</span><span class="zh"><strong>废弃购物车召回</strong>：<code>cart.abandoned</code> Kafka 事件触发营销自动化流程——在最后一次活跃约 1 小时后发送邮件或推送通知。购物车文档保留足够长时间（废弃后最多 7 天），以便用户通过召回链接点击后还原购物车。</span></li>
+      </ul>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs</span><span class="zh">权衡取舍</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr>
+          <th><span class="en">Axis</span><span class="zh">维度</span></th>
+          <th><span class="en">Option A</span><span class="zh">方案 A</span></th>
+          <th><span class="en">Option B</span><span class="zh">方案 B</span></th>
+          <th><span class="en">Recommendation</span><span class="zh">推荐</span></th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">CAP stance</span><span class="zh">CAP 取向</span></td>
+            <td><span class="en">CP — reject writes when KV store is degraded; cart is always consistent</span><span class="zh">CP——KV store 降级时拒绝写入；购物车始终一致</span></td>
+            <td><span class="en">AP — serve stale reads, queue writes; cart is always available</span><span class="zh">AP——提供过时读取，写入入队；购物车始终可用</span></td>
+            <td><span class="en"><strong>AP</strong>: a slightly stale cart is far better than an error message during BFCM. Money correctness is delegated to checkout.</span><span class="zh"><strong>AP</strong>：BFCM 期间略微过时的购物车远好于报错。金钱正确性委托给结账服务。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Inventory in cart</span><span class="zh">购物车中的库存</span></td>
+            <td><span class="en">Reserve stock on add-to-cart — buyer never loses an item they added</span><span class="zh">加购时预占库存——买家永远不会失去已加购的商品</span></td>
+            <td><span class="en">Validate at checkout only — stock is never locked in the cart</span><span class="zh">仅在结账时验证——库存从不锁定在购物车中</span></td>
+            <td><span class="en"><strong>Validate at checkout</strong>: reserving at cart scale (50M carts × 30-day TTL) would starve merchants of available stock. Reserve only at checkout for a short window (10–15 min).</span><span class="zh"><strong>结账时验证</strong>：在购物车规模（50M 购物车 × 30 天 TTL）预占库存会耗尽商家可用库存。仅在结账时短暂预占（10–15 分钟）。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Storage engine</span><span class="zh">存储引擎</span></td>
+            <td><span class="en">Redis — sub-ms, but durability risk (AOF gap, memory pressure)</span><span class="zh">Redis——亚毫秒延迟，但有持久化风险（AOF 间隙、内存压力）</span></td>
+            <td><span class="en">DynamoDB — durable, ~5 ms, fully managed, native TTL</span><span class="zh">DynamoDB——持久化，约 5 ms，全托管，原生 TTL</span></td>
+            <td><span class="en"><strong>Redis + DynamoDB write-through</strong>: Redis for hot reads, DynamoDB as durable SoT. On Redis miss, fall through to Dynamo.</span><span class="zh"><strong>Redis + DynamoDB 写透</strong>：Redis 服务热读，DynamoDB 作为持久化权威数据源。Redis 未命中时降级到 DynamoDB。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Concurrent device writes</span><span class="zh">并发设备写入</span></td>
+            <td><span class="en">LWW — simple, no retries, occasional silent overwrite</span><span class="zh">LWW——简单，无需重试，偶有静默覆盖</span></td>
+            <td><span class="en">OCC (version field) — correct, but adds client retry complexity</span><span class="zh">OCC（version 字段）——结果正确，但增加客户端重试复杂度</span></td>
+            <td><span class="en"><strong>LWW as default</strong>; offer OCC as an opt-in feature flag for shops where lost-item reports exceed threshold.</span><span class="zh"><strong>默认使用 LWW</strong>；对丢失商品投诉超过阈值的店铺，将 OCC 作为可选功能标志开放。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Cart document shape</span><span class="zh">购物车文档结构</span></td>
+            <td><span class="en">Whole-cart document (header + all lines as one blob) — one round-trip per op</span><span class="zh">整体购物车文档（头信息 + 所有行条目作为一个 blob）——每次操作一次往返</span></td>
+            <td><span class="en">Normalized rows (cart table + cart_line table) — flexible queries, but JOIN on every read</span><span class="zh">规范化行（cart 表 + cart_line 表）——查询灵活，但每次读取都需 JOIN</span></td>
+            <td><span class="en"><strong>Whole document</strong>: the access pattern is always "give me the whole cart" — a single-key GET is optimal. Normalized rows would require 2 queries and offer no query flexibility benefit.</span><span class="zh"><strong>整体文档</strong>：访问模式始终是"给我整个购物车"——单键 GET 是最优的。规范化行需要 2 次查询，且不带来任何查询灵活性收益。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Anonymous cart identity</span><span class="zh">匿名购物车身份</span></td>
+            <td><span class="en">Cookie-based cart token — stateless, CDN-friendly, no server-side session store</span><span class="zh">基于 cookie 的购物车令牌——无状态，CDN 友好，无需服务端 session 存储</span></td>
+            <td><span class="en">Server-side session — can store more state, but requires sticky sessions or a session store</span><span class="zh">服务端 session——可存储更多状态，但需要会话粘性或 session 存储</span></td>
+            <td><span class="en"><strong>Signed cookie token</strong>: stateless verification (HMAC), no session store overhead, survives load balancer rebalancing. The token carries the cart_id; the cart document lives in the KV store.</span><span class="zh"><strong>签名 cookie 令牌</strong>：无状态验证（HMAC），无 session 存储开销，负载均衡器重新分配时依然有效。令牌携带 cart_id；购物车文档存于 KV store。</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item"><summary><span class="en">Same item added at different quantities on two devices simultaneously</span><span class="zh">同一商品在两台设备上同时以不同数量加入购物车</span></summary>
+          <div class="faq-body">
+            <p>With LWW the last write wins, potentially discarding one device's change. The fix is to expose the
+            <code>version</code> field: the losing device gets a <code>409 Conflict</code>, re-fetches the current
+            document, and replays its mutation on top. An alternative is <strong>item-level merge</strong> — store each
+            line item as an independent entry with its own version rather than embedding them in a monolithic document.
+            Then concurrent writes to different variants are automatically conflict-free; only writes to the same variant
+            on two devices need arbitration (take the max, or last-write-wins per-line). Item-level storage adds indexing
+            complexity but makes concurrent mutations safe without OCC retries.</p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">Price of an item changed between add and checkout</span><span class="zh">加购到结账之间商品价格发生变化</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The cart displays <code>price_at_add</code> — the price at the moment the buyer added the item. At checkout,
+            the Checkout Service fetches the current price from the Pricing Service. If it differs, the checkout surface
+            shows the buyer the new price (with a callout: "price updated"). The buyer must confirm before proceeding.
+            Whether the cart accepts a <em>lower</em> price silently or always prompts is a product decision. The key
+            engineering invariant: <strong>the cart's stored price is never used to charge the buyer</strong> — only the
+            live price from the authoritative Pricing Service is used at order creation.</span><span class="zh">购物车展示 <code>price_at_add</code>——买家加购时的价格。结账时，Checkout Service 从定价服务获取当前价格。若有差异，结账界面向买家展示新价格（附提示："价格已更新"），买家须确认后方可继续。价格<em>降低</em>时是静默接受还是始终提示，属于产品决策。核心工程不变式：<strong>购物车中存储的价格绝不用于向买家收费</strong>——下单时始终使用权威定价服务的实时价格。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">Item goes out of stock after being added to the cart</span><span class="zh">商品在加购后售罄</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Because carts do not hold inventory reservations, there is nothing to release. When the buyer reaches
+            checkout, the Checkout Service calls the Inventory Service; if the variant is out of stock, the checkout
+            surface shows an error ("Item no longer available") and asks the buyer to remove it before continuing.
+            Optionally, the Cart Service can run a <strong>lazy availability check</strong> at cart view time —
+            querying the Inventory Service and annotating line items with a soft <code>availableForSale: false</code>
+            flag so the buyer sees the warning earlier in the funnel. This flag is advisory only and re-validated
+            at checkout.</span><span class="zh">因为购物车不持有库存预占，所以无需释放任何东西。当买家进入结账流程时，Checkout Service 调用库存服务；若该变体已售罄，结账界面显示错误（"商品已下架"）并要求买家在继续前将其移除。可选地，Cart Service 可在查看购物车时执行<strong>惰性可用性检查</strong>——查询库存服务并为行条目标注软性 <code>availableForSale: false</code> 标志，使买家在漏斗更早的环节看到提示。该标志仅供参考，结账时会重新验证。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">Very large carts or abuse (thousands of line items)</span><span class="zh">购物车商品极多或遭滥用（数千个行条目）</span></summary>
+          <div class="faq-body">
+            <p><span class="en">A cart with thousands of line items degrades KV performance (large document on every read/write)
+            and can be a denial-of-service vector. Mitigations: (1) enforce a hard <strong>max line items cap</strong>
+            (e.g., 500) at the Cart Service layer, returning a <code>422</code> if exceeded; (2) enforce a
+            per-shop and per-account rate limit on add-to-cart mutations; (3) monitor the p99 cart document size
+            and alert if it grows beyond a threshold. For legitimate bulk buyers (wholesale), consider a separate
+            Quote or Draft Order flow that bypasses the consumer cart and is backed by a relational store with
+            explicit pagination.</span><span class="zh">拥有数千个行条目的购物车会降低 KV 性能（每次读写都是大文档），也可能成为拒绝服务攻击向量。缓解措施：(1) 在 Cart Service 层强制执行<strong>行条目数硬上限</strong>（如 500），超出时返回 <code>422</code>；(2) 对加购操作施加每店铺、每账户的速率限制；(3) 监控 p99 购物车文档大小，超过阈值时告警。对于合法的批量买家（批发商），考虑使用独立的报价或草稿订单流程，绕过消费者购物车，以关系型存储为后端并支持分页。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">Guest-to-account edge cases (user logs in, then logs out, then in again)</span><span class="zh">游客转账户的边界情况（用户登录后退出，再次登录）</span></summary>
+          <div class="faq-body">
+            <p><span class="en">On first login, the anonymous cart is merged into the user's account cart and the anon cart token is
+            invalidated. If the buyer logs out, a new anonymous cart token is issued (fresh, empty). On re-login,
+            the new anonymous cart (possibly empty) is merged into the existing account cart again — this is a no-op
+            if the anon cart is empty, which is the common case. Edge: if the buyer shopped as a guest <em>after</em>
+            logging out and added items to the new anon cart, those items are merged in on the next login. The merge
+            is designed to be commutative and idempotent — running it twice on the same anon cart is safe because the
+            anon cart is deleted after the first successful merge, and subsequent merges against a missing key are
+            treated as merging an empty cart (no-op).</span><span class="zh">首次登录时，匿名购物车合并到用户账户购物车，匿名购物车令牌作废。若买家退出登录，系统颁发一个新的匿名购物车令牌（全新、空购物车）。再次登录时，新的匿名购物车（可能为空）再次合并到已有账户购物车——若匿名购物车为空，则为空操作（最常见情况）。边界情况：若买家在退出登录<em>后</em>以游客身份购物并向新匿名购物车添加了商品，这些商品将在下次登录时合并进来。合并设计为可交换且幂等的——对同一匿名购物车执行两次是安全的，因为匿名购物车在首次成功合并后即被删除，后续对不存在键的合并被视为合并空购物车（空操作）。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">Cross-region cart access and latency</span><span class="zh">跨区域购物车访问与延迟</span></summary>
+          <div class="faq-body">
+            <p><span class="en">For a globally distributed merchant base, cart reads from a distant region add 100–200 ms of latency.
+            Strategies: (1) <strong>replicate cart documents to the nearest region</strong> using DynamoDB Global Tables
+            or a multi-master Redis cluster — writes go to the buyer's closest region, async replication propagates
+            to others (eventual consistency; acceptable for carts). (2) <strong>Route authenticated users consistently</strong>
+            to a home region based on their <code>user_id</code> hash — cross-region hops only happen on first login from
+            a new geography. (3) For anonymous carts, the cookie carries the cart_id with a region hint in the token,
+            so the API Gateway can route the request directly to the correct region without a lookup round-trip.
+            Conflict resolution for multi-master: last-writer-wins by timestamp (e.g. DynamoDB Global Tables); the cart is low-stakes enough
+            that a slight inconsistency window (seconds) is acceptable.</span><span class="zh">对于全球分布的商家，从远端区域读取购物车会增加 100–200 ms 的延迟。策略：(1) 使用 DynamoDB Global Tables 或多主 Redis 集群将<strong>购物车文档复制到最近区域</strong>——写入发往买家最近的区域，异步复制传播到其他区域（最终一致性；对购物车可接受）。(2) 根据 <code>user_id</code> 哈希将<strong>已认证用户一致性地路由</strong>到归属区域——跨区域跳转仅在首次从新地理位置登录时发生。(3) 对于匿名购物车，cookie 中的令牌携带 cart_id 和区域提示，使 API Gateway 无需额外查询即可直接路由到正确区域。多主冲突解决：按时间戳的最后写入获胜（如 DynamoDB Global Tables）；购物车风险足够低，秒级的不一致窗口是可接受的。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Logged-in user edits the cart on web and mobile simultaneously — how do you reconcile?</span><span class="zh">已登录用户同时在 Web 和移动端编辑购物车——如何合并冲突？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Two reconciliation strategies exist. <strong>Last-Write-Wins (LWW) on the whole cart document</strong>: each client reads the current <code>version</code>, applies its mutation, and writes back. The write that arrives at the KV store last wins; the losing client receives a <code>409 Conflict</code>, re-fetches the canonical document, and re-applies its mutation. This is simple and correct for low-stakes carts. <strong>Per-line-item merge</strong>: store each line item as an independent key-value entry keyed by <code>{cart_id}:{variant_id}</code>. Writes to different variants are automatically conflict-free; only concurrent writes to the same variant need arbitration (take the last-writer or the max quantity). Per-line storage avoids most OCC retries but adds index complexity. For Shopify scale, LWW on the cart document is the right default — a brief inconsistency window is acceptable, and the client always receives the authoritative document after each mutation.</span><span class="zh">有两种协调策略。<strong>整体文档 LWW（最后写入获胜）</strong>：每个客户端读取当前 <code>version</code>，应用变更后写回。最后到达 KV store 的写入获胜；落败的客户端收到 <code>409 Conflict</code>，重新获取最新文档并重放变更。此方案简单，对低风险购物车完全适用。<strong>逐行合并</strong>：将每个行条目以 <code>{cart_id}:{variant_id}</code> 为键独立存储。对不同商品的并发写入天然无冲突，仅对同一商品的并发写入需仲裁（取最后写入或最大数量）。逐行存储能减少大多数 OCC 重试，但会增加索引复杂度。在 Shopify 规模下，默认使用整体文档 LWW 即可——短暂的不一致窗口可接受，且每次变更后客户端都会收到权威文档。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you build abandoned-cart recovery without spamming users?</span><span class="zh">如何在不骚扰用户的前提下实现废弃购物车召回？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The Cart Service emits a <code>cart.abandoned</code> event to Kafka after a configurable <strong>TTL of inactivity</strong> (typically 1 hour). A downstream marketing worker consumes this event and applies three guardrails before sending any notification: (1) <strong>deduplication</strong> — check whether a recovery message was already sent for this cart within the current abandonment window; (2) <strong>frequency caps</strong> — respect per-user caps (e.g., at most one recovery email per 24 hours); (3) <strong>opt-out / consent flags</strong> — verify the user has not unsubscribed from marketing emails. Only if all three pass does the worker enqueue the email or push notification. The cart document is retained for up to 7 days post-abandonment so that a recovery link click-through can restore the exact cart state.</span><span class="zh">Cart Service 在一段可配置的<strong>不活跃 TTL</strong>（通常为 1 小时）后向 Kafka 发送 <code>cart.abandoned</code> 事件。下游营销 Worker 消费该事件，在发送任何通知前执行三道保护：(1) <strong>去重</strong>——检查当前放弃窗口内是否已对该购物车发送过召回消息；(2) <strong>频率上限</strong>——遵守每用户上限（如每 24 小时最多发送一封召回邮件）；(3) <strong>退订/授权标志</strong>——确认用户未取消订阅营销邮件。三项全部通过后，Worker 才将邮件或推送通知入队。购物车文档在放弃后最多保留 7 天，以便用户通过召回链接点击后还原原有购物车状态。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A cart with 500 items or obvious abuse — what limits and protections do you add?</span><span class="zh">购物车有 500 件商品或明显滥用——应设置哪些限制和保护？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">An oversized cart document degrades KV performance and can be a denial-of-service vector. Defenses operate at three layers: (1) <strong>Max line-item count</strong> — enforce a hard cap (e.g., 250 line items) at the Cart Service, returning <code>422 Unprocessable Entity</code> on violation. (2) <strong>Per-item quantity cap</strong> — enforce a per-variant quantity limit (e.g., 99 units) to prevent bulk-buy manipulation. (3) <strong>Rate limiting on add-to-cart</strong> — apply a per-user or per-session rate limit (e.g., 60 mutations/minute) at the API Gateway to blunt bot traffic and scripted abuse. (4) <strong>Payload size guard</strong> — reject requests where the cart document would exceed a byte threshold (e.g., 64 KB) even if the line count is within limits. For legitimate wholesale buyers, route them to a Draft Order or Quote flow backed by a relational store with explicit pagination, rather than stretching the consumer cart.</span><span class="zh">过大的购物车文档会降低 KV 性能，也可能成为拒绝服务攻击向量。防御措施分三层：(1) <strong>行条目数上限</strong>——在 Cart Service 层强制硬上限（如 250 个行条目），违规时返回 <code>422 Unprocessable Entity</code>。(2) <strong>单品数量上限</strong>——限制每个商品变体的数量（如最多 99 件），防止批量购买操控。(3) <strong>加入购物车的速率限制</strong>——在 API Gateway 对每用户或每会话设置速率上限（如每分钟 60 次变更），以遏制机器人流量和脚本滥用。(4) <strong>载荷大小保护</strong>——即使行条目数在限制内，也拒绝购物车文档超过字节阈值（如 64 KB）的请求。对于合法的批发买家，将其路由到以关系型存储为后端、具备分页功能的草稿订单或报价流程，而不是滥用消费者购物车。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Promo codes and discounts — where are they validated?</span><span class="zh">优惠码和折扣——在哪里验证？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Discount validation follows the same pattern as price and inventory: <strong>estimate at display time, authoritative validation at checkout</strong>. When a buyer enters a promo code, the Cart Service calls the Discount Service for a <em>tentative</em> evaluation — this computes the estimated discount and displays it in the cart UI. However, this result is explicitly advisory: the Cart Service <strong>never stores the discounted price</strong> as the authoritative price. At checkout, the Checkout Service re-validates the promo code against the Discount Service under the full set of constraints (expiry date, usage limits, eligibility, minimum order value). If the code is no longer valid, the checkout surfaces the error before payment. The invariant is simple: <strong>never trust a cart-stored price to charge the buyer</strong> — always re-compute from authoritative sources at order creation time.</span><span class="zh">折扣验证遵循与价格、库存相同的模式：<strong>展示时估算，结账时权威验证</strong>。买家输入优惠码时，Cart Service 向 Discount Service 发起<em>试算</em>评估——计算预估折扣并在购物车 UI 中显示。但该结果仅供参考：Cart Service <strong>绝不将折后价格</strong>存储为权威价格。结账时，Checkout Service 在完整约束条件下（有效期、使用限额、资格要求、最低订单金额）重新向 Discount Service 验证优惠码。若优惠码已不可用，结账流程在付款前提示错误。不变原则很简单：<strong>永远不要信任购物车中存储的价格来向买家收费</strong>——始终在创建订单时从权威来源重新计算。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you A/B test cart changes safely?</span><span class="zh">如何安全地对购物车改动进行 A/B 测试？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Cart changes carry conversion risk — a bug that breaks add-to-cart costs real revenue. Safe rollout uses three levers: (1) <strong>Feature flags</strong> — gate the new behavior behind a flag evaluated at request time (e.g., by <code>shop_id</code> or a user cohort hash). This allows instant rollback without a code deploy. (2) <strong>Kill-switch aware of AP semantics</strong> — because the cart is AP, a flag outage must fail-open (keep serving the old behavior) rather than fail-closed (block all cart operations). Guard every flag read with a safe default. (3) <strong>Conversion monitoring</strong> — track add-to-cart rate, cart-to-checkout rate, and checkout completion rate separately for control vs. treatment cohorts. Wire alerts on relative degradation (e.g., >2% drop in conversion). Start with 1–5% of traffic, ramp slowly, and tie the ramp to the alert green-lighting. Never run a cart experiment at 50% without first validating at low traffic.</span><span class="zh">购物车改动存在转化风险——破坏"加入购物车"的 Bug 会造成真实营收损失。安全发布使用三个手段：(1) <strong>功能标志</strong>——将新行为置于请求时动态求值的标志后面（如按 <code>shop_id</code> 或用户分桶哈希）。这样无需代码部署即可即时回滚。(2) <strong>具备 AP 语义意识的熔断开关</strong>——因为购物车是 AP 系统，标志服务故障时必须 fail-open（继续使用旧行为），而非 fail-closed（阻断所有购物车操作）。每次读取标志时都要设置安全默认值。(3) <strong>转化率监控</strong>——分别跟踪对照组和实验组的加购率、购物车到结账率以及结账完成率。对相对降幅（如转化率下降 >2%）配置告警。从 1–5% 流量开始，缓慢扩量，并将扩量与告警绿灯挂钩。在低流量验证通过之前，切勿直接以 50% 流量运行购物车实验。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Guest → account: how does the cart carry over on signup or login?</span><span class="zh">游客→账户：注册或登录时购物车如何迁移？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">On signup or login, the client immediately calls <code>POST /cart/merge {anonymousCartToken}</code> before rendering the cart page. The merge logic in the Cart Service (or a synchronous merge worker) reads the anonymous cart by its token, reads the user's account cart (creating one if it does not exist), and applies the same conflict rules used elsewhere: same variant in both → sum quantities and cap; variant only in anon cart → append; variant only in user cart → keep untouched. After a successful merge, the anonymous cart is deleted and the token is invalidated (HMAC key rotation or a server-side revocation list). The operation is <strong>idempotent</strong>: if the client retries on a network error, the anon cart is already gone and the merge is a no-op. The user sees a unified cart with all items from both the guest and account sessions, and checkout proceeds normally against the merged user cart.</span><span class="zh">注册或登录时，客户端在渲染购物车页面之前立即调用 <code>POST /cart/merge {anonymousCartToken}</code>。Cart Service（或同步合并 Worker）读取匿名令牌对应的购物车，读取用户的账户购物车（不存在则新建），并应用统一的冲突规则：两者都有同一商品变体→累加数量并取上限；仅匿名购物车有的变体→追加；仅账户购物车有的变体→保持不变。合并成功后，匿名购物车被删除，令牌被作废（HMAC 密钥轮换或服务端吊销列表）。该操作是<strong>幂等的</strong>：若客户端因网络错误重试，匿名购物车已不存在，合并为空操作。用户看到的是包含游客和账户会话所有商品的统一购物车，结账流程照常在合并后的用户购物车上进行。</span></p>
+          </div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these five things in order</span><span class="zh">Staff 级总结——按顺序说出这五点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Cart is AP, not money-critical</strong> — keep it available at all costs; consistency lives at checkout.</span><span class="zh"><strong>购物车是 AP 系统，非金融关键</strong>——不惜一切保持可用；一致性由结账服务保证。</span></li>
+          <li><span class="en"><strong>Single-document KV storage</strong> — one key per cart, one round-trip per operation; no joins, no SQL scans.</span><span class="zh"><strong>单文档 KV 存储</strong>——每个购物车一个键，每次操作一次往返；无联表，无 SQL 扫描。</span></li>
+          <li><span class="en"><strong>Merge on login with explicit conflict rules</strong> — sum quantities for duplicates, cap at limits, retain user cart's price, delete the anon cart after success.</span><span class="zh"><strong>登录时合并并使用明确的冲突规则</strong>——重复商品累加数量并取上限，保留用户购物车价格，成功后删除匿名购物车。</span></li>
+          <li><span class="en"><strong>Never reserve inventory in the cart</strong> — validate price and stock at checkout only; reserving in the cart at scale starves merchants of available inventory.</span><span class="zh"><strong>购物车中永不预占库存</strong>——仅在结账时验证价格和库存；大规模在购物车预占会耗尽商家可用库存。</span></li>
+          <li><span class="en"><strong>TTL + abandonment events</strong> — carts expire automatically; <code>cart.abandoned</code> Kafka events drive recovery emails and analytics without coupling the hot path to marketing systems.</span><span class="zh"><strong>TTL + 废弃事件</strong>——购物车自动过期；<code>cart.abandoned</code> Kafka 事件驱动召回邮件和分析，无需将热路径与营销系统耦合。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2>Sources</h2></div>
+      <ul class="sources">
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (cart architecture, KV storage, checkout pipeline)</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview guide (cart, identity, availability)</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="04_multi_tenant_sharding.html">← 04 · Multi-tenant Sharding</a> &nbsp;·&nbsp; <a href="06_product_search.html">Next: 06 · Product Search →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

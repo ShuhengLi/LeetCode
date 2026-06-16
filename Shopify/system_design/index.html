@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shopify System Design — Staff Interview Prep</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ <span class="en">Staff Interview Prep</span><span class="zh">Staff 级面试准备</span></span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <span class="chip chip--svc"><span class="en">10 questions · staff level</span><span class="zh">10 道题 · staff 级</span></span>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">On this page</span><span class="zh">本页导航</span></h4>
+    <a href="#process"><span class="n">·</span> <span class="en">Interview process</span><span class="zh">面试流程</span></a>
+    <a href="#framework"><span class="n">·</span> <span class="en">The 8-step framework</span><span class="zh">8 步框架</span></a>
+    <a href="#values"><span class="n">·</span> <span class="en">What Shopify rewards</span><span class="zh">Shopify 加分/减分项</span></a>
+    <a href="#tier1"><span class="n">·</span> <span class="en">Tier 1 — Signature</span><span class="zh">第一层 — 标志性题</span></a>
+    <a href="#tier2"><span class="n">·</span> <span class="en">Tier 2 — Core platform</span><span class="zh">第二层 — 核心平台</span></a>
+    <a href="#tier3"><span class="n">·</span> <span class="en">Tier 3 — Ecosystem</span><span class="zh">第三层 — 平台生态</span></a>
+    <a href="#ops"><span class="n">·</span> <span class="en">Operational curveball</span><span class="zh">运维突袭题</span></a>
+    <a href="#sources"><span class="n">·</span> <span class="en">Sources</span><span class="zh">参考来源</span></a>
+
+    <h4><span class="en">Questions</span><span class="zh">题目</span></h4>
+    <a href="01_flash_sale.html"><span class="n">01</span> <span class="en">Flash Sale / BFCM</span><span class="zh">抢购 / 黑五</span></a>
+    <a href="02_inventory_management.html"><span class="n">02</span> <span class="en">Inventory</span><span class="zh">库存</span></a>
+    <a href="03_checkout_payments.html"><span class="n">03</span> <span class="en">Checkout & Pay</span><span class="zh">结账支付</span></a>
+    <a href="04_multi_tenant_sharding.html"><span class="n">04</span> <span class="en">Multi-tenant Pods</span><span class="zh">多租户 Pods</span></a>
+    <a href="05_shopping_cart.html"><span class="n">05</span> <span class="en">Shopping Cart</span><span class="zh">购物车</span></a>
+    <a href="06_product_search.html"><span class="n">06</span> <span class="en">Search & Catalog</span><span class="zh">搜索与目录</span></a>
+    <a href="07_webhook_delivery.html"><span class="n">07</span> <span class="en">Webhooks</span><span class="zh">Webhook</span></a>
+    <a href="08_rate_limiter.html"><span class="n">08</span> <span class="en">Rate Limiter</span><span class="zh">限流器</span></a>
+    <a href="09_notification_system.html"><span class="n">09</span> <span class="en">Notifications</span><span class="zh">通知系统</span></a>
+    <a href="10_analytics_pipeline.html"><span class="n">10</span> <span class="en">Analytics</span><span class="zh">数据分析</span></a>
+  </nav>
+
+  <main class="content">
+    <div class="index-hero">
+      <div class="eyebrow">Shopify · Senior / Staff Engineer</div>
+      <h1><span class="en">System Design Interview Prep</span><span class="zh">系统设计面试准备</span></h1>
+      <p>
+        <span class="en">Ten real, recurring Shopify system-design prompts — each worked end-to-end at <strong>staff level</strong>:
+        requirements → estimation → API → data model → architecture diagram → deep dives → trade-offs → follow-ups.
+        Shopify's round is unusual: it is <strong>e-commerce at planetary scale</strong>, not generic distributed systems. Every design is judged through one lens — <em>does it protect the merchant's sale?</em></span>
+        <span class="zh">十道真实、反复出现的 Shopify 系统设计题，每道题均以 <strong>staff 级</strong> 完整展开：需求 → 估算 → API → 数据模型 → 架构图 → 深挖 → 权衡 → 追问。Shopify 面试的与众不同之处在于：它考察的是<strong>行星级电商</strong>，而非泛化的分布式系统。每个设计都以同一标准评判 —— <em>它能保住商家的成交吗？</em></span>
+      </p>
+      <div class="hero meta" style="background:none;box-shadow:none;padding:0;margin-top:18px;">
+        <span class="chip">🛒 <span class="en">Merchant obsession</span><span class="zh">商家至上</span></span>
+        <span class="chip">📦 <span class="en">Inventory correctness</span><span class="zh">库存正确性</span></span>
+        <span class="chip">⚡ <span class="en">100× BFCM spikes</span><span class="zh">BFCM 百倍尖峰</span></span>
+        <span class="chip">🏢 <span class="en">Multi-tenant fairness</span><span class="zh">多租户公平性</span></span>
+      </div>
+    </div>
+
+    <!-- ============ PROCESS ============ -->
+    <section class="step" id="process">
+      <div class="step-head"><span class="step-num">i</span><h2><span class="en">The interview process</span><span class="zh">面试流程</span></h2><span class="sub"><span class="en">60-min design round, senior/staff only</span><span class="zh">60 分钟设计轮，仅限 senior/staff</span></span></div>
+      <p>
+        <span class="en">The dedicated <strong>System Design round</strong> exists for senior and staff candidates. At staff level the interviewer
+        cares less about whether you can name components and more about <strong>how you reason about the bottleneck and the business risk</strong> —
+        and whether you drive the conversation like an owner.</span>
+        <span class="zh">专项<strong>系统设计轮</strong>面向 senior 及 staff 候选人。在 staff 层级，面试官不太在意你能否叫出组件名称，更看重的是<strong>你如何分析瓶颈与业务风险</strong> —— 以及你是否像一个负责人那样主导对话。</span>
+      </p>
+      <div class="timeline">
+        <div class="stage"><h4><span class="en">Recruiter screen</span><span class="zh">招聘初筛</span></h4><span class="when"><span class="en">30 min · role, scope, comp</span><span class="zh">30 分钟 · 职位、范围、薪资</span></span></div>
+        <div class="stage"><h4><span class="en">Async CoderPad screen</span><span class="zh">异步 CoderPad 笔试</span></h4><span class="when"><span class="en">45–60 min · take-home-style coding</span><span class="zh">45–60 分钟 · 带回家式编程</span></span></div>
+        <div class="stage"><h4><span class="en">Pair programming ×2</span><span class="zh">结对编程 ×2</span></h4><span class="when"><span class="en">75–90 min · live coding, 2nd round is staff-specific</span><span class="zh">75–90 分钟 · 现场编程，第二轮为 staff 专项</span></span></div>
+        <div class="stage"><h4><span class="en">Life Story</span><span class="zh">职业经历叙述</span></h4><span class="when"><span class="en">60 min · narrative / behavioral</span><span class="zh">60 分钟 · 叙述 / 行为面试</span></span></div>
+        <div class="stage key"><h4><span class="en">Technical Deep Dive</span><span class="zh">技术深挖</span></h4><span class="when"><span class="en">60 min · your past architecture</span><span class="zh">60 分钟 · 聊你做过的架构</span></span></div>
+        <div class="stage key"><h4><span class="en">★ System Design round</span><span class="zh">★ 系统设计轮</span></h4><span class="when"><span class="en">60 min · the focus of this guide</span><span class="zh">60 分钟 · 本指南的核心</span></span></div>
+        <div class="stage"><h4><span class="en">Hiring Manager</span><span class="zh">用人经理面谈</span></h4><span class="when"><span class="en">30–45 min · values, scope, cross-team</span><span class="zh">30–45 分钟 · 价值观、范围、跨团队</span></span></div>
+      </div>
+      <div class="callout callout--info">
+        <span class="ct"><span class="en">Format note</span><span class="zh">形式说明</span></span>
+        <span class="en">Most Shopify design rounds are a conversation on a whiteboard / virtual canvas. A few teams (notably some
+        infra/data roles) run a hybrid where you sketch <em>and</em> write a little code. Ask your recruiter which variant
+        your panel uses so you can practice the right muscle.</span>
+        <span class="zh">大多数 Shopify 设计轮是在白板或虚拟画布上的对话。少数团队（尤其是基础设施/数据方向）采用混合形式：既要画图，<em>也</em>要写少量代码。提前问招聘人员你的面试组采用哪种形式，有针对性地练习。</span>
+      </div>
+    </section>
+
+    <!-- ============ FRAMEWORK ============ -->
+    <section class="step" id="framework" data-accent="arch">
+      <div class="step-head"><span class="step-num">F</span><h2><span class="en">The 8-step framework (every page follows this)</span><span class="zh">8 步框架（每道题均按此展开）</span></h2></div>
+      <p>
+        <span class="en">Keep a visible time budget. Spend the first ~10 min nailing scope, then move fast to a working diagram so you
+        have 20+ minutes for the deep dive — that is where staff signal lives.</span>
+        <span class="zh">保持可见的时间预算。前 ~10 分钟锁定范围，然后尽快画出可用架构图，留 20+ 分钟给深挖 —— staff 信号就藏在深挖里。</span>
+      </p>
+      <div class="framework">
+        <div class="fw"><div class="num">01</div><div class="t"><span class="en">Clarify</span><span class="zh">澄清</span></div><div class="d"><span class="en">Functional + non-functional. Ask, don't assume.</span><span class="zh">功能 + 非功能需求。主动问，别假设。</span></div></div>
+        <div class="fw"><div class="num">02</div><div class="t"><span class="en">Estimate</span><span class="zh">估算</span></div><div class="d"><span class="en">QPS, storage, hot-key math.</span><span class="zh">QPS、存储、热点 key 计算。</span></div></div>
+        <div class="fw"><div class="num">03</div><div class="t">API</div><div class="d"><span class="en">A few sharp endpoints.</span><span class="zh">几个关键接口。</span></div></div>
+        <div class="fw"><div class="num">04</div><div class="t"><span class="en">Data model</span><span class="zh">数据模型</span></div><div class="d"><span class="en">Schema + access patterns.</span><span class="zh">表结构 + 访问模式。</span></div></div>
+        <div class="fw"><div class="num">05</div><div class="t"><span class="en">Architecture</span><span class="zh">架构</span></div><div class="d"><span class="en">Request / data / event flow.</span><span class="zh">请求流 / 数据流 / 事件流。</span></div></div>
+        <div class="fw"><div class="num">06</div><div class="t"><span class="en">Deep dive</span><span class="zh">深挖</span></div><div class="d"><span class="en">The bottleneck / business risk.</span><span class="zh">瓶颈 / 业务风险。</span></div></div>
+        <div class="fw"><div class="num">07</div><div class="t"><span class="en">Trade-offs</span><span class="zh">权衡</span></div><div class="d"><span class="en">Name the axis, pick, justify.</span><span class="zh">点明取舍轴，选择并说明理由。</span></div></div>
+        <div class="fw"><div class="num">08</div><div class="t"><span class="en">Follow-ups</span><span class="zh">追问</span></div><div class="d"><span class="en">Failure, scale, evolution.</span><span class="zh">故障、扩展、演进。</span></div></div>
+      </div>
+      <div class="callout callout--staff">
+        <span class="ct">⭐ <span class="en">Staff signal — separate the three flows</span><span class="zh">Staff 信号 —— 三流分开画</span></span>
+        <span class="en">Shopify interviewers explicitly want to see <strong>request flow, data flow, and event flow drawn separately</strong>.
+        Synchronous read/write paths, the source-of-truth data path, and the async event path each have different
+        consistency and failure properties. Mixing them on one tangled diagram reads as senior-minus.</span>
+        <span class="zh">Shopify 面试官明确希望看到<strong>请求流、数据流和事件流分开绘制</strong>。同步读写路径、权威数据路径和异步事件路径各自有不同的一致性与故障属性。把它们混在一张乱图上，会被评为 senior 以下水平。</span>
+      </div>
+    </section>
+
+    <!-- ============ VALUES ============ -->
+    <section class="step" id="values" data-accent="follow">
+      <div class="step-head"><span class="step-num">★</span><h2><span class="en">What Shopify rewards (and what sinks candidates)</span><span class="zh">Shopify 加分项（及常见失分点）</span></h2></div>
+      <div class="cards cols-2">
+        <div class="card"><div class="lead"><span class="en">Rewards</span><span class="zh">加分项</span></div>
+          <ul style="margin:6px 0 0;">
+            <li class="en"><strong>Merchant obsession</strong> — frame every decision as "how does this protect a small merchant from losing a sale?"</li>
+            <li class="zh"><strong>商家至上</strong> —— 把每个决策都框定为"这如何保护小商家不丢失成交？"</li>
+            <li class="en"><strong>Correctness where money lives</strong> — inventory, payments, orders get strong consistency; storefront reads can be eventual.</li>
+            <li class="zh"><strong>金钱所在处的正确性</strong> —— 库存、支付、订单要强一致；店面读取可以最终一致。</li>
+            <li class="en"><strong>Spike thinking</strong> — BFCM is 100× normal; flash sales are 1000× on one product. Design for the spike, not the average.</li>
+            <li class="zh"><strong>峰值思维</strong> —— BFCM 是正常流量的 100 倍；某商品抢购是 1000 倍。为峰值设计，而非平均值。</li>
+            <li class="en"><strong>Multi-tenant fairness</strong> — one merchant's flash sale must not starve another's checkout.</li>
+            <li class="zh"><strong>多租户公平性</strong> —— 一个商家的抢购活动不得饿死另一个商家的结账流程。</li>
+          </ul>
+        </div>
+        <div class="card"><div class="lead"><span class="en">Sinks candidates</span><span class="zh">常见失分点</span></div>
+          <ul style="margin:6px 0 0;">
+            <li class="en">Treating it like FAANG "design Twitter" — ignoring the e-commerce domain.</li>
+            <li class="zh">把它当成 FAANG 的"设计 Twitter" —— 忽视电商领域的特殊性。</li>
+            <li class="en">Hand-waving inventory: "just decrement a counter" → <strong>overselling</strong>.</li>
+            <li class="zh">对库存轻描淡写："减个计数器就好了" → <strong>超卖</strong>。</li>
+            <li class="en">One global DB / no tenancy story at Shopify's scale.</li>
+            <li class="zh">单一全局数据库 / 在 Shopify 的规模下没有多租户方案。</li>
+            <li class="en">Designing only the happy path; no payment-gateway-outage or partial-failure story.</li>
+            <li class="zh">只设计顺利路径，没有支付网关故障或局部失败的应对方案。</li>
+            <li class="en">No numbers — can't estimate the hot-key QPS that breaks the design.</li>
+            <li class="zh">没有数字 —— 无法估算会压垮设计的热点 key QPS。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TIER 1 ============ -->
+    <div class="section-title" id="tier1">
+      <span class="tier-label tier-1">Tier 1</span><h2><span class="en">Shopify signature</span><span class="zh">Shopify 标志性题</span></h2>
+      <span class="hint"><span class="en">Highest frequency · most domain-specific · expect at least one of these</span><span class="zh">出现频率最高 · 最具领域特色 · 至少会碰到一道</span></span>
+    </div>
+    <div class="qcards">
+      <a class="qcard" href="01_flash_sale.html">
+        <div class="qnum">QUESTION 01</div>
+        <h3>🔥 <span class="en">Flash Sale / BFCM Traffic Surge</span><span class="zh">抢购 / BFCM 流量尖峰</span></h3>
+        <p><span class="en">A sneaker drop: 1M users, 1k units, in 10 seconds. Handle a 100×–1000× spike without overselling or melting checkout.</span><span class="zh">球鞋发售：100 万用户、1000 件库存、10 秒内售罄。在不超卖、不压垮结账的前提下承接 100×–1000× 流量尖峰。</span></p>
+        <div class="foot"><span class="topics"><span class="t">virtual waiting room</span><span class="t">Redis gate</span><span class="t">load shedding</span></span><span class="stars">★★★★★</span></div>
+      </a>
+      <a class="qcard" href="02_inventory_management.html">
+        <div class="qnum">QUESTION 02</div>
+        <h3>📦 <span class="en">Global Inventory Management</span><span class="zh">全局库存管理</span></h3>
+        <p><span class="en">Track stock across many warehouses and sales channels; never oversell while staying available. The classic correctness problem.</span><span class="zh">跨多仓库、多销售渠道追踪库存；在保持可用的同时绝不超卖。这是经典的正确性问题。</span></p>
+        <div class="foot"><span class="topics"><span class="t">reservations</span><span class="t">optimistic lock</span><span class="t">reconciliation</span></span><span class="stars">★★★★★</span></div>
+      </a>
+      <a class="qcard" href="03_checkout_payments.html">
+        <div class="qnum">QUESTION 03</div>
+        <h3>💳 <span class="en">Checkout & Payment Processing</span><span class="zh">结账与支付处理</span></h3>
+        <p><span class="en">A multi-region, idempotent checkout that survives a payment-gateway outage and never double-charges.</span><span class="zh">多区域、幂等的结账系统，能在支付网关故障时继续服务，且绝不重复扣款。</span></p>
+        <div class="foot"><span class="topics"><span class="t">idempotency</span><span class="t">saga</span><span class="t">outbox</span></span><span class="stars">★★★★★</span></div>
+      </a>
+      <a class="qcard" href="04_multi_tenant_sharding.html">
+        <div class="qnum">QUESTION 04</div>
+        <h3>🏢 <span class="en">Multi-Tenant Architecture (Pods)</span><span class="zh">多租户架构（Pods）</span></h3>
+        <p><span class="en">Millions of stores on shared infra. Shard by shop, isolate noisy neighbors, move a shop with zero downtime.</span><span class="zh">数百万店铺共享基础设施。按店铺分片、隔离"吵闹邻居"、零停机迁移店铺。</span></p>
+        <div class="foot"><span class="topics"><span class="t">sharding</span><span class="t">pods</span><span class="t">isolation</span></span><span class="stars">★★★★☆</span></div>
+      </a>
+    </div>
+
+    <!-- ============ TIER 2 ============ -->
+    <div class="section-title" id="tier2">
+      <span class="tier-label tier-2">Tier 2</span><h2><span class="en">Core platform</span><span class="zh">核心平台</span></h2>
+      <span class="hint"><span class="en">Common building blocks of the storefront & buyer experience</span><span class="zh">店面与买家体验的通用基础模块</span></span>
+    </div>
+    <div class="qcards">
+      <a class="qcard" href="05_shopping_cart.html">
+        <div class="qnum">QUESTION 05</div>
+        <h3>🛒 <span class="en">Shopping Cart Service</span><span class="zh">购物车服务</span></h3>
+        <p><span class="en">Carts for logged-in and anonymous buyers, merged on login, consistent across devices, available during spikes.</span><span class="zh">支持登录与匿名用户的购物车，登录时合并，跨设备一致，尖峰期保持可用。</span></p>
+        <div class="foot"><span class="topics"><span class="t">session</span><span class="t">merge</span><span class="t">TTL</span></span><span class="stars">★★★★☆</span></div>
+      </a>
+      <a class="qcard" href="06_product_search.html">
+        <div class="qnum">QUESTION 06</div>
+        <h3>🔎 <span class="en">Product Catalog, Search & Filtering</span><span class="zh">商品目录、搜索与筛选</span></h3>
+        <p><span class="en">Per-store search with facets, typo tolerance, and near-real-time index updates as merchants edit products.</span><span class="zh">按店搜索，支持分面筛选、纠错容错，商家编辑商品后近实时更新索引。</span></p>
+        <div class="foot"><span class="topics"><span class="t">inverted index</span><span class="t">faceting</span><span class="t">CDC</span></span><span class="stars">★★★★☆</span></div>
+      </a>
+    </div>
+
+    <!-- ============ TIER 3 ============ -->
+    <div class="section-title" id="tier3">
+      <span class="tier-label tier-3">Tier 3</span><h2><span class="en">Platform & ecosystem</span><span class="zh">平台与生态</span></h2>
+      <span class="hint"><span class="en">Infra primitives — strong differentiators if you go deep</span><span class="zh">基础设施原语 —— 深挖则能形成强力差异化</span></span>
+    </div>
+    <div class="qcards">
+      <a class="qcard" href="07_webhook_delivery.html">
+        <div class="qnum">QUESTION 07</div>
+        <h3>🔗 <span class="en">Webhook & Event Delivery</span><span class="zh">Webhook 与事件投递</span></h3>
+        <p><span class="en">Deliver order/inventory events to thousands of third-party apps: at-least-once, ordered-ish, with retries & DLQ.</span><span class="zh">将订单/库存事件投递给数千个第三方应用：至少一次、尽量有序，带重试机制和死信队列。</span></p>
+        <div class="foot"><span class="topics"><span class="t">at-least-once</span><span class="t">retry/backoff</span><span class="t">DLQ</span></span><span class="stars">★★★★☆</span></div>
+      </a>
+      <a class="qcard" href="08_rate_limiter.html">
+        <div class="qnum">QUESTION 08</div>
+        <h3>🚦 <span class="en">Rate Limiting API</span><span class="zh">API 限流</span></h3>
+        <p><span class="en">Per-tenant limits for REST + GraphQL (cost-based) that are fair, distributed, and cheap to check.</span><span class="zh">对 REST + GraphQL（按成本计费）实施按租户限流，要求公平、分布式且检查开销低。</span></p>
+        <div class="foot"><span class="topics"><span class="t">token bucket</span><span class="t">GraphQL cost</span><span class="t">Redis</span></span><span class="stars">★★★☆☆</span></div>
+      </a>
+      <a class="qcard" href="09_notification_system.html">
+        <div class="qnum">QUESTION 09</div>
+        <h3>🔔 <span class="en">Notification System</span><span class="zh">通知系统</span></h3>
+        <p><span class="en">Order confirmations & merchant alerts across email / SMS / push: templated, deduped, multi-provider, deliverable at spike.</span><span class="zh">跨邮件 / 短信 / 推送的订单确认与商家提醒：模板化、去重、多供应商，尖峰期可达。</span></p>
+        <div class="foot"><span class="topics"><span class="t">fan-out</span><span class="t">provider failover</span><span class="t">dedupe</span></span><span class="stars">★★★☆☆</span></div>
+      </a>
+      <a class="qcard" href="10_analytics_pipeline.html">
+        <div class="qnum">QUESTION 10</div>
+        <h3>📊 <span class="en">Real-time Merchant Analytics</span><span class="zh">实时商家数据分析</span></h3>
+        <p><span class="en">Live sales dashboards per store: ingest the order firehose, aggregate, serve sub-second queries with accuracy guarantees.</span><span class="zh">每店实时销售看板：摄入订单数据洪流，聚合计算，在精度保证下提供亚秒级查询。</span></p>
+        <div class="foot"><span class="topics"><span class="t">stream agg</span><span class="t">lambda/kappa</span><span class="t">OLAP</span></span><span class="stars">★★★☆☆</span></div>
+      </a>
+    </div>
+
+    <!-- ============ OPS ============ -->
+    <section class="step" id="ops" data-accent="deep" style="margin-top:30px;">
+      <div class="step-head"><span class="step-num">!</span><h2><span class="en">Operational curveball</span><span class="zh">运维突袭题</span></h2><span class="sub"><span class="en">sometimes replaces the design prompt</span><span class="zh">有时会取代设计题</span></span></div>
+      <p>
+        <span class="en">A few candidates report a debugging-flavored prompt instead of a greenfield design:
+        <strong>"Checkout p99 latency just spiked 5×. Walk me through how you find and fix it — live."</strong>
+        It tests operational maturity, not box-drawing. A staff answer moves top-down through a mental dependency tree:</span>
+        <span class="zh">部分候选人反映收到的是调试类题目，而非从零开始的设计题：
+        <strong>"结账 p99 延迟刚刚飙升了 5 倍。现场带我走一遍你的排查和修复过程。"</strong>
+        这道题考察的是运维成熟度，而非画框框。Staff 级回答会自上而下逐层遍历脑海中的依赖树：</span>
+      </p>
+      <ul>
+        <li><span class="en"><strong>Scope &amp; blast radius</strong> — all shops or one pod? all regions? started when? correlate with a deploy / flag flip / marketing event.</span><span class="zh"><strong>范围与爆炸半径</strong> —— 所有店铺还是单个 pod？所有区域？从何时开始？与发布 / 功能开关切换 / 营销活动相关联。</span></li>
+        <li><span class="en"><strong>RED/USE metrics</strong> — Rate, Errors, Duration per service; Utilization, Saturation, Errors per resource. Find the layer where latency is <em>introduced</em>.</span><span class="zh"><strong>RED/USE 指标</strong> —— 每个服务的请求率、错误率、耗时；每个资源的利用率、饱和度、错误数。找出延迟<em>被引入</em>的那一层。</span></li>
+        <li><span class="en"><strong>Usual suspects</strong> — DB connection-pool exhaustion, a hot shard, cache stampede after a flush, a slow downstream (payment gateway), GC pauses, a noisy-neighbor tenant.</span><span class="zh"><strong>常见嫌疑人</strong> —— 数据库连接池耗尽、热分片、缓存刷新后的缓存踩踏、慢下游（支付网关）、GC 停顿、"吵闹邻居"租户。</span></li>
+        <li><span class="en"><strong>Mitigate before root-cause</strong> — roll back, shed non-critical load, raise pool limits, fail open on a non-essential dependency. <em>Stop the bleeding, then investigate.</em></span><span class="zh"><strong>先缓解再溯源</strong> —— 回滚、卸掉非关键负载、提高连接池上限、对非核心依赖采用失败放行。<em>先止血，再排查。</em></span></li>
+        <li><span class="en"><strong>Follow-up</strong> — add an SLO + alert, a load-shedding guard, and a postmortem action item so it can't silently regress.</span><span class="zh"><strong>后续跟进</strong> —— 添加 SLO + 告警、负载卸除保护，以及复盘行动项，防止问题静默复现。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct">⭐ <span class="en">Staff signal</span><span class="zh">Staff 信号</span></span>
+        <span class="en">Name the <strong>mitigation before the root cause</strong>, and quantify customer impact in dollars/conversions, not just milliseconds.
+        That framing — protect the merchant first — is the whole interview in miniature.</span>
+        <span class="zh">先说<strong>缓解措施，再说根因</strong>，并用美元 / 转化率而非毫秒来量化客户影响。这个框架 —— 先保住商家 —— 正是整场面试的缩影。</span>
+      </div>
+    </section>
+
+    <!-- ============ SOURCES ============ -->
+    <section class="step" id="sources" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources &amp; how these were chosen</span><span class="zh">参考来源与题目遴选说明</span></h2></div>
+      <p>
+        <span class="en">Questions were cross-referenced across candidate reports and Shopify-specific interview guides; the architectures
+        reflect publicly documented Shopify engineering patterns (Pods/sharding, BFCM scaling, GraphQL cost-based limits).</span>
+        <span class="zh">题目经过多份候选人报告与 Shopify 专项面试指南交叉核对；架构方案反映的是 Shopify 公开记录的工程模式（Pods/分片、BFCM 扩容、GraphQL 按成本限流）。</span>
+      </p>
+      <ul class="sources">
+        <li><a href="https://www.teamblind.com/post/looking-for-shopify-system-design-interview-questions-luvmv6te">Blind — "Looking for Shopify System Design interview questions"</a></li>
+        <li><a href="https://www.teamblind.com/post/Shopify-System-Design-Interview---Mobile-3nAvERd6">Blind — "Shopify System Design Interview – Mobile"</a></li>
+        <li><a href="https://interviewing.io/shopify-interview-questions">interviewing.io — Shopify interview questions</a></li>
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">InterviewQuery — Shopify SWE guide (2025)</a></li>
+        <li><a href="https://www.techinterview.org/shopify-interview/">techinterview.org — Shopify interview guide</a></li>
+        <li><a href="https://www.techinterview.org/post/3233464757/lld-flash-sale-system/">techinterview.org — Flash Sale system (inventory lock, queue, oversell)</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify step-by-step guide</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify</a></li>
+        <li><a href="https://www.designgurus.io/answers/detail/what-shopify-system-design-interview-questions-to-prepare">DesignGurus — Shopify SD questions to prepare</a></li>
+      </ul>
+      <div class="callout callout--warn">
+        <span class="ct"><span class="en">Use responsibly</span><span class="zh">请负责任地使用</span></span>
+        <span class="en">These are <em>preparation</em> prompts assembled from public reports, not leaked questions. The interview tests reasoning,
+        not memorized answers — practice the framework so you can adapt when the prompt is phrased differently.</span>
+        <span class="zh">这些是从公开报告整理而来的<em>备考</em>题目，并非泄露的真题。面试考察的是推理能力，而非背诵答案 —— 请熟练运用框架，以便在题目换一种表述时也能灵活应对。</span>
+      </div>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

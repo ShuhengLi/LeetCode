@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · Analytics Pipeline — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 10 · Analytics</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">This question</span><span class="zh">本题导航</span></h4>
+    <a href="#reqs"><span class="n">1</span> <span class="en">Clarify</span><span class="zh">明确需求</span></a>
+    <a href="#est"><span class="n">2</span> <span class="en">Estimate</span><span class="zh">容量估算</span></a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> <span class="en">Data model</span><span class="zh">数据模型</span></a>
+    <a href="#arch"><span class="n">5</span> <span class="en">Architecture</span><span class="zh">架构</span></a>
+    <a href="#deep"><span class="n">6</span> <span class="en">Deep dives</span><span class="zh">深度探讨</span></a>
+    <a href="#trade"><span class="n">7</span> <span class="en">Trade-offs</span><span class="zh">权衡取舍</span></a>
+    <a href="#follow"><span class="n">8</span> <span class="en">Follow-ups</span><span class="zh">追问题目</span></a>
+    <h4><span class="en">Navigate</span><span class="zh">导航</span></h4>
+    <a href="09_notification_system.html"><span class="n">←</span> 09 <span class="en">Notifications</span><span class="zh">通知系统</span></a>
+    <a href="index.html"><span class="n">→</span> <span class="en">Index</span><span class="zh">题目列表</span></a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow"><span class="en">Tier 3 · Ecosystem · ★★★☆☆</span><span class="zh">第三级 · 生态系统 · ★★★☆☆</span></div>
+      <h1><span class="en">Design a Real-Time Merchant Analytics Pipeline</span><span class="zh">设计实时商家分析流水线</span></h1>
+      <p><span class="en">"Shopify's merchant dashboard shows <strong>live analytics — sales today, orders, conversion rate, top products, live visitor count</strong> — updating within seconds. Ingest a firehose of events, aggregate per shop, and serve sub-second dashboard queries with clear accuracy guarantees."</span><span class="zh">"Shopify 商家仪表盘展示<strong>实时数据——今日销售额、订单数、转化率、热销商品、当前访客数</strong>，每秒刷新。需要摄入海量事件流，按店铺聚合，并以亚秒级延迟响应仪表盘查询，同时提供明确的准确性保证。"</span></p>
+      <div class="meta">
+        <span class="chip"><span class="en">Ingest firehose → stream aggregation → OLAP</span><span class="zh">事件摄入 → 流聚合 → OLAP</span></span>
+        <span class="chip"><span class="en">Freshness vs accuracy per metric</span><span class="zh">各指标的新鲜度与准确性权衡</span></span>
+        <span class="chip">⏱ 60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question is deceptively hard</span><span class="zh">为什么这道题比看起来难</span></span>
+      <span class="en">Merchants make <strong>real-time business decisions</strong> (restock, shift ad spend, flag promotions) on these numbers.
+      That means data must be <strong>fast AND trustworthy</strong> — and "trustworthy" means different things per metric: revenue
+      must be <em>exact</em> while unique-visitor counts can be <em>approximate</em>. The pipeline must handle hundreds of millions
+      of pageviews per day across millions of shops with sub-second query latency and cost-efficient storage.</span>
+      <span class="zh">商家依据这些数据做出<strong>实时业务决策</strong>（补货、调整广告投放、标记促销）。这意味着数据必须<strong>既快速又可信</strong>——而"可信"对不同指标有不同含义：收入必须<em>精确</em>，而独立访客数<em>近似</em>即可。整个流水线需要在数百万店铺中处理每天数亿次页面浏览，同时保证亚秒级查询延迟和高效的存储成本。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">明确需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 主动提问，不要假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li class="en">Metrics: <strong>sales revenue, order count, conversion rate, AOV, top products, traffic sources, live visitor count</strong>.</li>
+            <li class="zh">指标：<strong>销售额、订单数、转化率、AOV（平均订单金额）、热销商品、流量来源、实时访客数</strong>。</li>
+            <li class="en">Time ranges: today, last 7 days, custom range; granularities: per-minute, hourly, daily.</li>
+            <li class="zh">时间范围：今天、最近 7 天、自定义范围；粒度：分钟、小时、天。</li>
+            <li class="en">Scoped per shop; merchant sees only their own data.</li>
+            <li class="zh">数据按店铺隔离；商家只能查看自己的数据。</li>
+            <li class="en">Dashboard refreshes in near-real-time (seconds, not minutes).</li>
+            <li class="zh">仪表盘近实时刷新（秒级，非分钟级）。</li>
+            <li class="en">Historical data queryable (up to 2 years).</li>
+            <li class="zh">历史数据可查询（最长 2 年）。</li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li class="en"><strong>Query latency</strong>: sub-second for dashboard reads.</li>
+            <li class="zh"><strong>查询延迟</strong>：仪表盘读取亚秒级响应。</li>
+            <li class="en"><strong>Data latency</strong>: events visible in dashboards within ~5 seconds.</li>
+            <li class="zh"><strong>数据延迟</strong>：事件在 ~5 秒内可见于仪表盘。</li>
+            <li class="en"><strong>Accuracy</strong>: revenue/orders exact; visitor counts approximate is acceptable.</li>
+            <li class="zh"><strong>精确性</strong>：收入/订单必须精确；访客数允许近似。</li>
+            <li class="en"><strong>High ingest throughput</strong>: pageviews dominate at 100k–1M events/sec platform-wide.</li>
+            <li class="zh"><strong>高摄入吞吐量</strong>：页面浏览事件为主，全平台峰值 100k–1M 事件/秒。</li>
+            <li class="en"><strong>Multi-tenant high cardinality</strong>: millions of shops, each with their own metrics.</li>
+            <li class="zh"><strong>多租户高基数</strong>：数百万店铺，每个店铺有各自的指标。</li>
+            <li class="en"><strong>Cost efficiency</strong>: hot/cold tiering; historical data must not cost as much as real-time.</li>
+            <li class="zh"><strong>成本效率</strong>：冷热分层存储；历史数据成本不应与实时数据相当。</li>
+            <li class="en"><strong>Late-event correctness</strong>: must handle out-of-order and delayed events.</li>
+            <li class="zh"><strong>乱序事件正确性</strong>：必须处理乱序和延迟到达的事件。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to actually ask out loud</span><span class="zh">面试时需要大声提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li class="en">Which metrics and what freshness — true real-time (seconds) or near-real-time (minutes) for each? <em>Sales must be exact; visitor counts can be approximate — confirm this split early.</em></li>
+          <li class="zh">哪些指标需要什么新鲜度——各自需要真实时（秒级）还是近实时（分钟级）？<em>销售额必须精确；访客数可以近似——尽早确认这一区分。</em></li>
+          <li class="en">Must revenue figures always be exactly correct, or is a small lag acceptable? <em>This drives the exactly-once vs at-least-once processing choice.</em></li>
+          <li class="zh">收入数据必须时刻精确，还是允许短暂延迟？<em>这决定了选择精确一次（exactly-once）还是至少一次（at-least-once）处理语义。</em></li>
+          <li class="en">What historical range and granularity do merchants need? A two-year range at per-minute granularity is very different from daily rollups.</li>
+          <li class="zh">商家需要多长的历史数据范围和什么粒度？两年范围的分钟级粒度与按天汇总在存储成本上天差地别。</li>
+          <li class="en">Expected peak event volume? Pageviews on BFCM can be orders of magnitude above daily average.</li>
+          <li class="zh">预期峰值事件量是多少？黑色星期五（BFCM）期间的页面浏览量可能比日常均值高出几个数量级。</li>
+          <li class="en">Do we need to correct past buckets when a late order arrives (e.g., delayed payment webhook)?</li>
+          <li class="zh">当迟到订单到达时（例如延迟的支付 Webhook），是否需要修正过去的汇总桶？</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">ingest dominates reads by orders of magnitude</span><span class="zh">写入摄入量比读取 QPS 高出几个数量级</span></span></div>
+      <p><span class="en">The key insight: <strong>write/ingest throughput dwarfs read QPS</strong>. Pageviews from storefronts dominate the event stream — a large platform-wide sale event can push over a million events per second. But dashboard queries, while latency-sensitive, are far fewer.</span><span class="zh">核心洞察：<strong>写入/摄入吞吐量远超读取 QPS</strong>。店面页面浏览事件主导整个事件流——平台级大促期间可突破百万事件/秒。仪表盘查询虽对延迟敏感，但数量远少于写入。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">500k</div><div class="l"><span class="en">peak pageview events/sec (platform-wide)</span><span class="zh">峰值页面浏览事件/秒（全平台）</span></div></div>
+        <div class="kpi"><div class="v">10M+</div><div class="l"><span class="en">distinct shops (high-cardinality tenants)</span><span class="zh">独立店铺数量（高基数多租户）</span></div></div>
+        <div class="kpi"><div class="v">&lt;1 s</div><div class="l"><span class="en">target dashboard query p99 latency</span><span class="zh">目标仪表盘查询 p99 延迟</span></div></div>
+        <div class="kpi"><div class="v">5–10 s</div><div class="l"><span class="en">target data freshness (event → visible)</span><span class="zh">目标数据新鲜度（事件 → 可见）</span></div></div>
+      </div>
+      <ul>
+        <li class="en"><strong>Event size</strong>: ~500 bytes per pageview event → 500k ev/s × 500 B ≈ 250 MB/s raw ingest. Kafka at 3× replication = ~750 MB/s bandwidth. Well within Kafka's capability.</li>
+        <li class="zh"><strong>事件大小</strong>：每条页面浏览事件约 500 字节 → 500k 事件/秒 × 500 B ≈ 250 MB/s 原始摄入。Kafka 3 副本 = ~750 MB/s 带宽，在 Kafka 能力范围之内。</li>
+        <li class="en"><strong>Rollup storage</strong>: pre-aggregating to per-minute buckets per shop drastically reduces storage vs keeping raw events. One row per (shop × metric × minute) — at 10M shops × 10 metrics × 1440 min/day ≈ 144B rows/day before sparse-shop optimization. In practice, sparse shops write only when active — real volume 100–1000× lower.</li>
+        <li class="zh"><strong>汇总存储</strong>：按店铺预聚合到分钟桶，相比保留原始事件大幅节省存储。每行对应（店铺 × 指标 × 分钟）——10M 店铺 × 10 指标 × 1440 分钟/天 ≈ 1440 亿行/天（优化前）。实际上，稀疏店铺仅在有活动时才写入，实际量低 100–1000 倍。</li>
+        <li class="en"><strong>Dashboard read QPS</strong>: even at 1M active merchants, if each refreshes every 30 s, that's ~33k QPS. Pre-aggregated rollups + a serving cache make this trivial for an OLAP cluster.</li>
+        <li class="zh"><strong>仪表盘读取 QPS</strong>：即使有 100 万活跃商家，每 30 秒刷新一次，也仅约 33k QPS。预聚合汇总 + 服务缓存使 OLAP 集群轻松应对。</li>
+        <li class="en"><strong>Retention</strong>: raw events stored in Kafka for ~7 days (replay window). Rollups kept hot in OLAP for 90 days, archived in object storage (Parquet/S3) for up to 2 years.</li>
+        <li class="zh"><strong>数据保留</strong>：原始事件在 Kafka 中保留约 7 天（回放窗口）。汇总数据在 OLAP 中热存 90 天，之后归档到对象存储（Parquet/S3）最长 2 年。</li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">State explicitly: <em>"The bottleneck is ingest throughput and multi-tenant OLAP query performance, not raw storage. Pre-aggregating rollups in the stream processor is the primary lever for both query latency and storage cost — but only for approximate or additive metrics. For exact revenue, I need exactly-once semantics end-to-end."</em></span>
+        <span class="zh">明确说出：<em>"瓶颈在于摄入吞吐量和多租户 OLAP 查询性能，而非原始存储。在流处理器中预聚合汇总是降低查询延迟和存储成本的首要手段——但仅适用于近似或可加性指标。对于精确收入，我需要端到端的精确一次语义。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row"><span class="method get">GET</span><span class="path">/analytics/{shop}/metrics?metric=&amp;range=&amp;granularity=</span><span class="desc">Aggregated metric over a time range at given granularity</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/analytics/{shop}/realtime</span><span class="desc">Live visitors (HLL estimate) + today's revenue (exact) + order count</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/analytics/{shop}/top-products?range=&amp;limit=</span><span class="desc">Top N products by revenue or unit count</span></div>
+      </div>
+      <p><span class="en">Callers specify <code>metric</code> (e.g. <code>revenue</code>, <code>orders</code>, <code>conversion_rate</code>, <code>visitors</code>), <code>range</code> (e.g. <code>today</code>, <code>7d</code>, <code>2025-06-01/2025-06-07</code>), and <code>granularity</code> (<code>minute</code>, <code>hour</code>, <code>day</code>). The query API translates these into OLAP group-by queries backed by pre-aggregated rollup tables, falling back to a read-through cache for the most recent incomplete bucket.</span><span class="zh">调用方指定 <code>metric</code>（如 <code>revenue</code>、<code>orders</code>、<code>conversion_rate</code>、<code>visitors</code>）、<code>range</code>（如 <code>today</code>、<code>7d</code>、<code>2025-06-01/2025-06-07</code>）和 <code>granularity</code>（<code>minute</code>、<code>hour</code>、<code>day</code>）。Query API 将这些参数转换为基于预聚合汇总表的 OLAP group-by 查询，对最新未完成的桶则回退到穿透缓存读取。</span></p>
+      <p><span class="en">The <code>/realtime</code> endpoint is special: it reads from a low-latency serving cache (Redis) populated by the stream processor every few seconds. It deliberately separates the "is this order in yet?" hot path from the batch-query path.</span><span class="zh"><code>/realtime</code> 接口较为特殊：它从流处理器每隔几秒刷新的低延迟服务缓存（Redis）读取数据，刻意将"这笔订单到了吗？"的热路径与批量查询路径分离。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Raw events in Kafka (k = key, s = schema, c = columns, n = notes)</span><span class="zh">Kafka 中的原始事件（k = 键，s = Schema，c = 列，n = 备注）</span></h4>
+      <pre><code><span class="c">-- order_event (emitted by checkout / order service)</span>
+<span class="k">key</span>:    shop_id                    <span class="c">-- partition key for locality</span>
+<span class="k">schema</span>: order_event
+<span class="n">cols</span>:   event_id UUID, shop_id, order_id, user_id, ts TIMESTAMP,
+        revenue_cents BIGINT, currency, line_items JSONB
+<span class="n">note</span>:   exactly-once semantics required; event_id is the idempotency key
+
+<span class="c">-- pageview_event (emitted by storefront)</span>
+<span class="k">key</span>:    shop_id
+<span class="k">schema</span>: pageview_event
+<span class="n">cols</span>:   event_id UUID, shop_id, session_id, user_fingerprint,
+        ts TIMESTAMP, url, referrer, product_id NULLABLE
+<span class="n">note</span>:   at-least-once acceptable; duplicate session counts handled by HLL</code></pre>
+
+      <h4><span class="en">Pre-aggregated rollups in OLAP store (ClickHouse / Druid / Pinot)</span><span class="zh">OLAP 存储中的预聚合汇总表（ClickHouse / Druid / Pinot）</span></h4>
+      <pre><code><span class="c">-- metric_rollup (one row per shop × metric × time_bucket)</span>
+<span class="k">cols</span>:   shop_id        UUID     <span class="c">-- partition / shard key</span>
+        metric         VARCHAR  <span class="c">-- 'revenue_cents', 'order_count', 'visitors_hll', ...</span>
+        time_bucket    TIMESTAMP<span class="c">-- truncated to granularity (minute / hour / day)</span>
+        granularity    ENUM     <span class="c">-- 'minute', 'hour', 'day'</span>
+        value_exact    BIGINT   <span class="c">-- for additive exact metrics (revenue, orders)</span>
+        value_hll      BYTES    <span class="c">-- HyperLogLog sketch for unique visitors</span>
+        updated_at     TIMESTAMP
+
+<span class="c">-- serving cache key in Redis (refreshed every ~5 s by stream processor)</span>
+<span class="n">realtime:{shop_id}:today</span> → {revenue_cents, order_count, live_visitors_approx}</code></pre>
+
+      <p><span class="en">The separation between <code>value_exact</code> (revenue, orders — additive, exactly-once) and <code>value_hll</code> (unique visitors — mergeable sketch, approximate) is a first-class design decision: it drives the consistency and processing guarantees per metric.</span><span class="zh"><code>value_exact</code>（收入、订单——可加性，精确一次）与 <code>value_hll</code>（独立访客——可合并草图，近似）之间的分离是一个头等设计决策：它决定了每个指标的一致性和处理保证。</span></p>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">streaming spine + batch reprocess path</span><span class="zh">流处理主干 + 批量重处理路径</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 540" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- Main streaming spine arrows (top-to-bottom center column) -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <!-- Event sources → Kafka -->
+            <line x1="410" y1="72" x2="410" y2="100"/>
+            <!-- Kafka → Flink stream processor -->
+            <line x1="410" y1="152" x2="410" y2="186"/>
+            <!-- Flink → OLAP store -->
+            <line x1="410" y1="240" x2="410" y2="278"/>
+            <!-- OLAP → Query API -->
+            <line x1="410" y1="334" x2="410" y2="368"/>
+            <!-- Query API → Dashboard -->
+            <line x1="410" y1="422" x2="410" y2="456"/>
+            <!-- Flink → Redis serving cache (right branch) -->
+            <line x1="510" y1="213" x2="608" y2="213"/>
+            <!-- Redis → Dashboard (right branch) -->
+            <line x1="648" y1="250" x2="648" y2="456" marker-end="url(#ah)"/>
+          </g>
+
+          <!-- Batch / reprocess path (dashed, left side) -->
+          <g stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)">
+            <!-- Kafka → Batch reprocessor (left) -->
+            <line x1="310" y1="126" x2="170" y2="126"/>
+            <line x1="130" y1="126" x2="130" y2="186"/>
+            <!-- Batch → OLAP (overwrites rollups) -->
+            <line x1="130" y1="240" x2="130" y2="278"/>
+            <line x1="130" y1="306" x2="310" y2="306"/>
+          </g>
+
+          <!-- Event sources row -->
+          <g>
+            <rect x="50" y="16" width="170" height="56" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="135" y="40" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334155">Checkout / Order Svc</text>
+            <text x="135" y="57" text-anchor="middle" font-size="10.5" fill="#64748b">emits order_event</text>
+          </g>
+          <g>
+            <rect x="600" y="16" width="170" height="56" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="685" y="40" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334155">Storefront (CDN)</text>
+            <text x="685" y="57" text-anchor="middle" font-size="10.5" fill="#64748b">emits pageview_event</text>
+          </g>
+          <!-- arrows from sources to Kafka -->
+          <line x1="220" y1="44" x2="310" y2="126" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#ah)"/>
+          <line x1="600" y1="44" x2="510" y2="126" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#ah)"/>
+
+          <!-- Kafka -->
+          <g>
+            <rect x="310" y="100" width="200" height="52" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="410" y="122" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka — event log</text>
+            <text x="410" y="139" text-anchor="middle" font-size="10.5" fill="#ea580c">partitioned by shop_id · 7-day retention</text>
+          </g>
+
+          <!-- Batch reprocessor (left) -->
+          <g>
+            <rect x="50" y="186" width="160" height="54" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="130" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">Batch Reprocessor</text>
+            <text x="130" y="225" text-anchor="middle" font-size="10" fill="#ea580c">Flink batch / Spark</text>
+            <text x="130" y="238" text-anchor="middle" font-size="10" fill="#ea580c">replay from Kafka log</text>
+          </g>
+
+          <!-- Flink stream processor (center) -->
+          <g>
+            <rect x="310" y="186" width="200" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="410" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Flink Stream Processor</text>
+            <text x="410" y="225" text-anchor="middle" font-size="10.5" fill="#008060">windowed agg keyed by shop+metric</text>
+            <text x="410" y="238" text-anchor="middle" font-size="10.5" fill="#008060">watermarks · exactly-once checkpoints</text>
+          </g>
+
+          <!-- Redis serving cache (right) -->
+          <g>
+            <rect x="608" y="186" width="172" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="694" y="208" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">Redis — serving cache</text>
+            <text x="694" y="225" text-anchor="middle" font-size="10.5" fill="#dc2626">realtime:{shop}:today</text>
+            <text x="694" y="238" text-anchor="middle" font-size="10.5" fill="#dc2626">TTL 30 s · refreshed by Flink</text>
+          </g>
+
+          <!-- OLAP store (center) -->
+          <g>
+            <rect x="310" y="278" width="200" height="56" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="410" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">OLAP Store</text>
+            <text x="410" y="317" text-anchor="middle" font-size="10.5" fill="#7c3aed">ClickHouse / Druid / Pinot</text>
+            <text x="410" y="330" text-anchor="middle" font-size="10.5" fill="#7c3aed">columnar · pre-rollup · sub-second group-by</text>
+          </g>
+
+          <!-- Query API (center) -->
+          <g>
+            <rect x="310" y="368" width="200" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="410" y="390" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Query API</text>
+            <text x="410" y="407" text-anchor="middle" font-size="10.5" fill="#008060">range → rollup → OLAP query</text>
+            <text x="410" y="420" text-anchor="middle" font-size="10.5" fill="#008060">merges incomplete latest bucket</text>
+          </g>
+
+          <!-- Dashboard (center + right converge) -->
+          <g>
+            <rect x="280" y="456" width="260" height="52" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="410" y="478" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">Merchant Dashboard</text>
+            <text x="410" y="494" text-anchor="middle" font-size="10.5" fill="#2563eb">realtime strip + historical charts</text>
+          </g>
+
+          <!-- label for batch path -->
+          <text x="130" y="172" text-anchor="middle" font-size="10" fill="#ea580c">replay / recompute</text>
+          <!-- label for Redis → dashboard arrow -->
+          <text x="700" y="370" font-size="10" fill="#dc2626">live strip</text>
+          <!-- label for Flink → Redis arrow -->
+          <text x="558" y="206" font-size="10" fill="#dc2626">push ~5s</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client / source</span>
+          <span><i style="background:#2563eb"></i> edge / dashboard</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore (OLAP)</span>
+          <span><i style="background:#ea580c"></i> async / queue / batch</span>
+        </div>
+        <div class="cap"><span class="en">Streaming spine (center): event sources → Kafka → Flink → OLAP → Query API → Dashboard. Redis serves the real-time strip directly. Dashed orange: batch reprocess path replays from Kafka to correct OLAP rollups.</span><span class="zh">流处理主干（中央）：事件源 → Kafka → Flink → OLAP → Query API → 仪表盘。Redis 直接服务实时展示条。橙色虚线：批量重处理路径，从 Kafka 回放以修正 OLAP 汇总。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件详解</span></h4>
+      <ul>
+        <li class="en"><strong>Event sources</strong> — the checkout/order service emits <code>order_event</code> (low volume, exact revenue); the storefront (behind CDN) emits <code>pageview_event</code> (high volume, approximate visitors). Both are partitioned by <code>shop_id</code> in Kafka for locality.</li>
+        <li class="zh"><strong>事件源</strong> — 结账/订单服务发出 <code>order_event</code>（低量，精确收入）；店面（CDN 后）发出 <code>pageview_event</code>（高量，近似访客）。两者均在 Kafka 中按 <code>shop_id</code> 分区以保证数据局部性。</li>
+        <li class="en"><strong>Kafka</strong> — durable, replayable event log. 7-day retention enables the batch reprocess path. Topics partitioned by <code>shop_id</code> so a single shop's events land on the same partition, simplifying keyed aggregation.</li>
+        <li class="zh"><strong>Kafka</strong> — 持久化、可回放的事件日志。7 天保留期支持批量重处理路径。Topic 按 <code>shop_id</code> 分区，同一店铺的事件落入同一分区，简化键控聚合。</li>
+        <li class="en"><strong>Flink stream processor</strong> — consumes Kafka, runs windowed aggregation keyed by <code>(shop_id, metric, time_bucket)</code>. Emits rollup rows to OLAP and pushes the latest realtime snapshot to Redis. Watermarks handle late events; checkpointing enables exactly-once for revenue.</li>
+        <li class="zh"><strong>Flink 流处理器</strong> — 消费 Kafka，按 <code>(shop_id, metric, time_bucket)</code> 运行窗口聚合。将汇总行写入 OLAP，并将最新实时快照推送到 Redis。水印处理迟到事件；Checkpoint 保证收入的精确一次语义。</li>
+        <li class="en"><strong>Redis serving cache</strong> — holds the <code>realtime:{shop}:today</code> snapshot refreshed every ~5 seconds. The dashboard's live-stats strip reads from here, not from the OLAP store, keeping query latency sub-100ms and OLAP cluster load low.</li>
+        <li class="zh"><strong>Redis 服务缓存</strong> — 保存每约 5 秒刷新的 <code>realtime:{shop}:today</code> 快照。仪表盘实时数据条从此处读取，而非 OLAP，保持查询延迟低于 100ms 并降低 OLAP 集群负载。</li>
+        <li class="en"><strong>OLAP store (ClickHouse / Druid / Pinot)</strong> — columnar, pre-aggregated rollup tables. Serves historical range queries with sub-second latency at high cardinality. Pre-rollup means the group-by is over pre-computed rows, not raw events.</li>
+        <li class="zh"><strong>OLAP 存储（ClickHouse / Druid / Pinot）</strong> — 列式存储，预聚合汇总表。在高基数下以亚秒级延迟服务历史范围查询。预汇总意味着 group-by 作用于预计算行，而非原始事件。</li>
+        <li class="en"><strong>Query API</strong> — translates dashboard requests into OLAP queries. For ranges that include an incomplete current minute, it merges the OLAP result for past complete buckets with the Redis realtime value for the current incomplete bucket.</li>
+        <li class="zh"><strong>Query API</strong> — 将仪表盘请求转换为 OLAP 查询。对于包含当前不完整分钟的时间范围，将过去完整桶的 OLAP 结果与当前不完整桶的 Redis 实时值合并。</li>
+        <li class="en"><strong>Batch reprocessor</strong> — replays from Kafka when a pipeline bug is found or late data needs to backfill. Overwrites OLAP rollup rows for affected buckets. This is the kappa-style "single log, replay to correct" pattern.</li>
+        <li class="zh"><strong>批量重处理器</strong> — 发现流水线 Bug 或需要回填迟到数据时，从 Kafka 回放。覆盖受影响桶的 OLAP 汇总行。这是 Kappa 架构风格的"单一日志，回放修正"模式。</li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度探讨</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号的关键所在</span></span></div>
+
+      <h3><span class="en">① Lambda vs Kappa architecture</span><span class="zh">① Lambda 与 Kappa 架构对比</span></h3>
+      <p><span class="en">The classic debate for analytics pipelines: <strong>lambda</strong> (a separate batch layer for accuracy + a speed layer for freshness, then reconciling the two outputs) vs <strong>kappa</strong> (a single stream pipeline, with replay of the durable log for corrections).</span><span class="zh">分析流水线的经典争论：<strong>Lambda</strong>（独立批处理层保证准确性 + 速度层保证新鲜度，再协调两路输出）与 <strong>Kappa</strong>（单一流处理流水线，通过回放持久化日志进行修正）之间的取舍。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Dimension</span><span class="zh">维度</span></th><th>Lambda</th><th>Kappa</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Code complexity</span><span class="zh">代码复杂度</span></td>
+            <td><span class="en">Two separate pipelines (batch + stream) with duplicate aggregation logic; divergence risk</span><span class="zh">两条独立流水线（批处理 + 流处理），聚合逻辑重复；存在分歧风险</span></td>
+            <td><span class="en">One pipeline; batch corrections are just a replay of the same code on historical data</span><span class="zh">单一流水线；批量修正只是在历史数据上回放同一段代码</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Freshness</span><span class="zh">数据新鲜度</span></td>
+            <td><span class="en">Speed layer is fresh; batch layer lags hours</span><span class="zh">速度层数据新鲜；批处理层延迟数小时</span></td>
+            <td><span class="en">Single stream is fresh; replay temporarily co-exists</span><span class="zh">单一流处理数据新鲜；回放与实时流暂时并存</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Accuracy / corrections</span><span class="zh">准确性 / 修正</span></td>
+            <td><span class="en">Batch recomputes the truth; serve batch output for finalized windows</span><span class="zh">批处理重算真实值；已完成窗口以批处理输出为准</span></td>
+            <td><span class="en">Replay the event log with a fixed version of the job to recompute; same result</span><span class="zh">用修复版本的作业回放事件日志重计算；结果相同</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Operational burden</span><span class="zh">运维负担</span></td>
+            <td><span class="en">High: operate, monitor, and version two pipelines</span><span class="zh">高：需运维、监控并管理两条流水线的版本</span></td>
+            <td><span class="en">Lower: one codebase, replay managed by Kafka retention window</span><span class="zh">较低：单一代码库，回放由 Kafka 保留窗口管理</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Infrastructure cost</span><span class="zh">基础设施成本</span></td>
+            <td><span class="en">Higher: two compute fleets</span><span class="zh">更高：需要两套计算集群</span></td>
+            <td><span class="en">Lower: replay re-uses the stream cluster at lower priority</span><span class="zh">较低：回放以低优先级复用流处理集群</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Recommendation</span><span class="zh">推荐方案</span></span>
+        <span class="en">Prefer <strong>kappa-style</strong>: one Flink stream job for both live aggregation and historical replay. Lambda's dual code paths introduce divergence bugs precisely when you need accuracy most. The 7-day Kafka retention window is the replay buffer; extend to 30 days if regulatory retention matters. Note the consistency split is orthogonal to this choice: <strong>exact revenue comes from exactly-once streaming</strong> (checkpointed Flink + idempotent sink), and <strong>approximate visitors from HyperLogLog</strong> — neither needs a batch layer. Lambda only earns its keep if some metric truly requires a heavy batch-only algorithm you cannot run incrementally.</span>
+        <span class="zh">推荐 <strong>Kappa 风格</strong>：用一个 Flink 流作业同时承担实时聚合和历史回放。Lambda 的双代码路径恰恰在最需要准确性时引入分歧 Bug。7 天 Kafka 保留窗口即为回放缓冲区；如有合规保留要求可延长至 30 天。注意一致性分层与此选择正交：<strong>精确收入来自精确一次流处理</strong>（Flink Checkpoint + 幂等 Sink），<strong>近似访客数来自 HyperLogLog</strong>——两者都不需要批处理层。仅当某个指标真正需要无法增量运行的重型批处理算法时，Lambda 才值得引入。</span>
+      </div>
+
+      <h3><span class="en">② Stream aggregation and windowing</span><span class="zh">② 流聚合与窗口化</span></h3>
+      <p><span class="en">Flink processes events in <strong>tumbling windows</strong> (non-overlapping, fixed-size — e.g., one-minute buckets) keyed by <code>(shop_id, metric)</code>. Each window emits a rollup row when it closes. For the live dashboard strip, the <em>current incomplete window</em> is also emitted as a running aggregate every few seconds.</span><span class="zh">Flink 以 <code>(shop_id, metric)</code> 为键，在<strong>滚动窗口</strong>（不重叠、固定大小——例如一分钟桶）中处理事件。每个窗口关闭时发出一行汇总数据。对于仪表盘实时展示条，<em>当前未完成窗口</em>也会每隔几秒以运行聚合的形式发出。</span></p>
+      <p><span class="en">Out-of-order events are handled with <strong>event-time watermarks</strong>: Flink tracks the maximum seen event timestamp and declares all events with <code>ts &lt; watermark − grace_period</code> as late. A grace period of 60 seconds tolerates most mobile/CDN delivery delays. Late events within the grace period update the window normally; events beyond the grace are forwarded to a side output for manual inspection or triggering a targeted bucket recompute.</span><span class="zh">乱序事件通过<strong>事件时间水印</strong>处理：Flink 跟踪已见的最大事件时间戳，将所有满足 <code>ts &lt; watermark − grace_period</code> 的事件标记为迟到。60 秒的宽限期可容纳大多数移动端/CDN 的传输延迟。宽限期内的迟到事件正常更新窗口；超出宽限期的事件转发至侧输出，供人工检查或触发针对性的桶重计算。</span></p>
+      <p><span class="en"><strong>Checkpointing</strong> (every 30 seconds to S3/GCS) gives Flink exactly-once processing guarantees: on failure, the job replays from the last checkpoint, re-processing events without double-counting. This is what makes exact revenue possible in a streaming pipeline.</span><span class="zh"><strong>Checkpoint</strong>（每 30 秒保存至 S3/GCS）赋予 Flink 精确一次处理保证：故障时，作业从最近的 Checkpoint 回放，重新处理事件而不重复计数。这正是在流处理流水线中实现精确收入的关键。</span></p>
+
+      <h3><span class="en">③ OLAP serving store selection</span><span class="zh">③ OLAP 服务存储选型</span></h3>
+      <p><span class="en">Why not just query Postgres/MySQL for dashboard analytics? OLTP stores are row-oriented, optimized for point lookups and small-range scans — not aggregating millions of rollup rows across thousands of shops in sub-second latency.</span><span class="zh">为何不直接用 Postgres/MySQL 来支撑仪表盘分析？OLTP 存储是行式的，针对点查和小范围扫描优化——无法在亚秒级延迟内对数千店铺的数百万汇总行进行聚合。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Store</span><span class="zh">存储</span></th><th><span class="en">Strengths</span><span class="zh">优势</span></th><th><span class="en">Weaknesses</span><span class="zh">劣势</span></th><th><span class="en">Best fit</span><span class="zh">最适用场景</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td>ClickHouse</td>
+            <td><span class="en">Extremely fast single-node or small cluster; MergeTree supports high-ingest and pre-rollup via materialized views; excellent for time-series group-by</span><span class="zh">单节点或小集群极快；MergeTree 通过物化视图支持高摄入和预汇总；时间序列 group-by 表现出色</span></td>
+            <td><span class="en">Joins are harder; replication less battle-tested at very large scale</span><span class="zh">Join 操作较难；超大规模下副本机制实战经验相对不足</span></td>
+            <td><span class="en">Mid-scale analytics (Shopify's merchant dashboard)</span><span class="zh">中等规模分析（Shopify 商家仪表盘）</span></td>
+          </tr>
+          <tr>
+            <td>Apache Druid</td>
+            <td><span class="en">Purpose-built for sub-second multi-dimensional group-by; native rollup at ingest; tiered storage (hot/warm/cold) built-in</span><span class="zh">专为亚秒级多维 group-by 设计；摄入时原生汇总；内置冷热分层存储</span></td>
+            <td><span class="en">Complex operational model; JVM heap tuning required; query syntax less familiar</span><span class="zh">运维模型复杂；需要调优 JVM 堆；查询语法不够常见</span></td>
+            <td><span class="en">Very high query QPS with many dimensions</span><span class="zh">多维度超高查询 QPS 场景</span></td>
+          </tr>
+          <tr>
+            <td>Apache Pinot</td>
+            <td><span class="en">Real-time + batch hybrid; UPSERT support; very low query latency; Kafka native connector</span><span class="zh">实时 + 批处理混合；支持 UPSERT；查询延迟极低；原生 Kafka 连接器</span></td>
+            <td><span class="en">Newer; smaller community than Druid</span><span class="zh">较新；社区规模小于 Druid</span></td>
+            <td><span class="en">When low-latency UPSERT of rollup corrections matters</span><span class="zh">汇总修正需要低延迟 UPSERT 时</span></td>
+          </tr>
+          <tr>
+            <td>OLTP (Postgres)</td>
+            <td><span class="en">Familiar; ACID; strong consistency</span><span class="zh">熟悉；ACID；强一致性</span></td>
+            <td><span class="en">Row-oriented; full scans kill performance at scale; cannot serve 33k dashboard QPS sub-second</span><span class="zh">行式存储；大规模全表扫描性能极差；无法亚秒级响应 33k 仪表盘 QPS</span></td>
+            <td><span class="en">Source-of-truth order tables, not analytics</span><span class="zh">订单事实表，非分析场景</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><span class="en">Pre-aggregate rollups at ingest time (Flink writes complete 1-minute buckets) rather than relying on query-time aggregation over raw events. This reduces the OLAP store's query-time work by 2–3 orders of magnitude and is what makes sub-second latency achievable at millions-of-shops cardinality.</span><span class="zh">在摄入时预聚合汇总（Flink 写入完整的 1 分钟桶），而非依赖查询时对原始事件的聚合。这将 OLAP 存储的查询时工作减少 2–3 个数量级，也正是在数百万店铺基数下实现亚秒级延迟的关键。</span></p>
+
+      <h3><span class="en">④ Exact vs approximate — per-metric consistency choice</span><span class="zh">④ 精确 vs 近似——按指标选择一致性级别</span></h3>
+      <p><span class="en">Not all metrics need the same consistency guarantee. Making this choice explicit is a key staff-level signal:</span><span class="zh">并非所有指标都需要相同的一致性保证。明确说出这一区分是 Staff 级别的关键信号：</span></p>
+      <ul>
+        <li class="en"><strong>Revenue, order count, AOV</strong> — <em>must be exact</em>. A merchant making a $50k restocking decision on an underreported revenue figure is a direct business harm. Use exactly-once processing (Flink checkpoints + idempotent writes keyed by <code>event_id</code>) and additive rollups in the OLAP store.</li>
+        <li class="zh"><strong>收入、订单数、AOV</strong> — <em>必须精确</em>。商家基于低报的收入数据做出 5 万美元的补货决策，会造成直接业务损失。使用精确一次处理（Flink Checkpoint + 以 <code>event_id</code> 为键的幂等写入）和 OLAP 中的可加性汇总。</li>
+        <li class="en"><strong>Unique visitors, session counts</strong> — <em>approximate is fine</em>. Using <strong>HyperLogLog (HLL)</strong> sketches instead of exact counts gives ~1% <em>standard</em> error (relative) at ~1/1000 the memory and storage cost. HLL sketches are also <em>mergeable</em>: combine the HLL for minute-1 and minute-2 to get the hourly estimate without re-scanning events. This is critical for rollup efficiency.</li>
+        <li class="zh"><strong>独立访客数、会话数</strong> — <em>近似即可</em>。使用 <strong>HyperLogLog（HLL）</strong> 草图代替精确计数，以约 1/1000 的内存和存储成本实现约 1% 的相对标准误差。HLL 草图还具有<em>可合并性</em>：将第 1 分钟和第 2 分钟的 HLL 合并即可得到小时估算，无需重新扫描事件，对汇总效率至关重要。</li>
+        <li class="en"><strong>Conversion rate</strong> — derived from exact order count ÷ approximate visitor count; inherits approximate nature but is acceptable for decision-making at this granularity.</li>
+        <li class="zh"><strong>转化率</strong> — 由精确订单数 ÷ 近似访客数推导得出；继承了近似性质，但在该粒度下用于决策是可接受的。</li>
+      </ul>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Choosing the right tool per metric</span><span class="zh">按指标选择正确工具</span></span>
+        <span class="en">Do not use HyperLogLog for revenue, and do not waste memory storing exact counts for visitors. The decision: is this metric used for <strong>financial transactions or legal compliance?</strong> If yes, exactly-once + exact. If it is a behavioral metric used for trend analysis, approximate with HLL. Document this split in the schema — <code>value_exact</code> vs <code>value_hll</code> columns make it explicit and prevent future engineers from accidentally using the wrong column.</span>
+        <span class="zh">不要对收入使用 HyperLogLog，也不要浪费内存为访客存储精确计数。判断原则：该指标是否用于<strong>财务交易或法律合规</strong>？若是，则精确一次 + 精确值；若是用于趋势分析的行为指标，则用 HLL 近似。在 Schema 中记录这一分层——<code>value_exact</code> 与 <code>value_hll</code> 列使其显式化，防止未来工程师误用错误列。</span>
+      </div>
+
+      <h3><span class="en">⑤ Late and out-of-order data — corrections and replay</span><span class="zh">⑤ 迟到与乱序数据——修正与回放</span></h3>
+      <p><span class="en">Delayed events are a real problem in practice: mobile apps buffer events offline, payment webhooks arrive seconds to minutes late, and CDN edge nodes batch pageviews before flushing. The pipeline must handle them without either dropping them or serving wrong numbers.</span><span class="zh">延迟事件在实践中是真实存在的问题：移动应用离线缓存事件、支付 Webhook 延迟数秒到数分钟、CDN 边缘节点批量积累页面浏览后才刷出。流水线必须在不丢弃事件也不提供错误数据的前提下处理它们。</span></p>
+      <p><span class="en"><strong>Watermark + grace period</strong>: Flink advances its event-time clock to <code>max_seen_ts − 60s</code>. Any event within the 60-second grace still updates the correct window. An event arriving 5 minutes late goes to a side output for targeted replay.</span><span class="zh"><strong>水印 + 宽限期</strong>：Flink 将事件时间时钟推进至 <code>max_seen_ts − 60s</code>。60 秒宽限期内的任何事件仍可正常更新对应窗口。延迟 5 分钟到达的事件则转发至侧输出，触发针对性回放。</span></p>
+      <p><span class="en"><strong>Bucket corrections via replay</strong>: when the side output accumulates enough late events for a bucket, a micro-batch replay job re-reads those events from Kafka, recomputes the affected rollup rows, and upserts the corrected values into the OLAP store. Pinot and ClickHouse both support idempotent upserts keyed by <code>(shop_id, metric, time_bucket)</code>.</span><span class="zh"><strong>通过回放修正桶数据</strong>：当侧输出为某个桶积累了足够多的迟到事件时，微批回放作业从 Kafka 重新读取这些事件，重计算受影响的汇总行，并将修正值 upsert 到 OLAP 存储。Pinot 和 ClickHouse 均支持以 <code>(shop_id, metric, time_bucket)</code> 为键的幂等 upsert。</span></p>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Serving wrong revenue numbers — the failure mode you must name</span><span class="zh">提供错误收入数据——必须点名的故障模式</span></span>
+        <span class="en">A pipeline bug (e.g., double-counting due to a Flink job restart without proper checkpointing) that inflates or deflates revenue figures is a serious product incident: merchants may over-order inventory, over-spend on ads, or distrust the platform entirely. The mitigation: (1) exactly-once checkpointing ensures no double-count on restart; (2) idempotent writes keyed by <code>event_id</code> ensure the OLAP store doesn't double-count even if Flink emits a duplicate; (3) replay from the raw event log allows full recomputation from a known-good state — this is the "undo button" for pipeline bugs. Naming this replay recovery path explicitly separates staff from senior candidates.</span>
+        <span class="zh">流水线 Bug（例如 Flink 作业重启时未正确 Checkpoint 导致重复计数）造成收入数据虚高或虚低，是严重的产品事故：商家可能因此超额备货、过度投放广告，或完全失去对平台的信任。缓解措施：(1) 精确一次 Checkpoint 确保重启后不重复计数；(2) 以 <code>event_id</code> 为键的幂等写入确保即使 Flink 发出重复输出，OLAP 存储也不会重复计数；(3) 从原始事件日志回放允许从已知正确状态完全重算——这是流水线 Bug 的"撤销按钮"。明确说出这条回放恢复路径，是区分 Staff 与 Senior 候选人的关键。</span>
+      </div>
+
+      <h3><span class="en">⑥ Multi-tenant high cardinality and hot/cold tiering</span><span class="zh">⑥ 多租户高基数与冷热分层</span></h3>
+      <p><span class="en">Millions of shops × metrics × time buckets creates extreme cardinality. Key strategies:</span><span class="zh">数百万店铺 × 指标 × 时间桶产生极高基数。核心策略如下：</span></p>
+      <ul>
+        <li class="en"><strong>Partition by shop_id</strong> in Kafka, Flink, and the OLAP store. This ensures a shop's events are co-located and aggregation is embarrassingly parallel — no cross-shard joins needed for single-shop dashboard queries.</li>
+        <li class="zh"><strong>按 shop_id 分区</strong>：在 Kafka、Flink 和 OLAP 存储中均按 <code>shop_id</code> 分区。确保同一店铺的事件数据局部化，聚合可完全并行——单店铺仪表盘查询无需跨分片 Join。</li>
+        <li class="en"><strong>Sparse writes</strong>: most shops are inactive most minutes. Only write a rollup row when a shop has non-zero activity in a bucket. This cuts storage by 100–1000× vs writing zero rows for every shop every minute.</li>
+        <li class="zh"><strong>稀疏写入</strong>：大多数店铺在大多数分钟内没有活动。仅当店铺在某个桶内有非零活动时才写入汇总行。与每分钟为每个店铺写入零行相比，可节省 100–1000 倍存储。</li>
+        <li class="en"><strong>Hot/warm/cold tiering</strong>: OLAP store keeps the last 90 days in fast NVMe (hot). Data between 90 days and 2 years is archived to S3/GCS as Parquet files (cold), queryable via Presto/Trino for custom ranges but with higher latency. The dashboard transparently routes based on the requested range.</li>
+        <li class="zh"><strong>冷热温分层</strong>：OLAP 存储在快速 NVMe 中保留最近 90 天数据（热层）。90 天至 2 年的数据归档为 S3/GCS 上的 Parquet 文件（冷层），可通过 Presto/Trino 查询自定义范围，但延迟较高。仪表盘根据请求的时间范围自动路由，对用户透明。</li>
+        <li class="en"><strong>Whale shops</strong>: a handful of large shops (e.g., Gymshark, Allbirds) generate orders of magnitude more events than the average. Route whale shops to dedicated Kafka partitions and dedicated Flink parallelism slots to prevent them from blocking other shops' aggregation windows.</li>
+        <li class="zh"><strong>巨鲸店铺</strong>：少数大型店铺（如 Gymshark、Allbirds）产生的事件量比平均水平高出几个数量级。将巨鲸店铺路由至专用 Kafka 分区和专用 Flink 并行槽，防止它们阻塞其他店铺的聚合窗口。</li>
+      </ul>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">需要讨论的权衡取舍</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Metric accuracy</span><span class="zh">指标精确性</span></td>
+            <td><span class="en">Exact counts everywhere — simple, consistent, expensive at scale for high-cardinality metrics like unique visitors</span><span class="zh">全部精确计数——简单一致，但独立访客等高基数指标在大规模下成本极高</span></td>
+            <td><span class="en">HyperLogLog for approximate metrics (visitors) + exact for financial (revenue, orders)</span><span class="zh">近似指标（访客）用 HyperLogLog，财务指标（收入、订单）用精确值</span></td>
+            <td><span class="en"><strong>Per-metric choice</strong>: HLL for behavioral, exactly-once exact for financial. Document in schema.</span><span class="zh"><strong>按指标选择</strong>：行为指标用 HLL，财务指标用精确一次。在 Schema 中记录。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Architecture pattern</span><span class="zh">架构模式</span></td>
+            <td><span class="en">Lambda — separate batch (accurate) + speed (fresh) layers; complex, duplicate logic, divergence risk</span><span class="zh">Lambda — 独立批处理（准确）+ 速度层（新鲜）；复杂，逻辑重复，存在分歧风险</span></td>
+            <td><span class="en">Kappa — single stream pipeline + replay from log for corrections; simpler ops</span><span class="zh">Kappa — 单一流处理流水线 + 从日志回放修正；运维更简单</span></td>
+            <td><span class="en"><strong>Kappa</strong>: one codebase, replay via Kafka retention. Lambda only if batch requires a fundamentally different algorithm.</span><span class="zh"><strong>Kappa</strong>：单一代码库，通过 Kafka 保留窗口回放。仅当批处理需要根本不同的算法时才选 Lambda。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Aggregation timing</span><span class="zh">聚合时机</span></td>
+            <td><span class="en">Pre-aggregate rollups in Flink at ingest; small fixed storage; sub-second queries</span><span class="zh">摄入时在 Flink 中预聚合汇总；存储固定且小；亚秒级查询</span></td>
+            <td><span class="en">Store raw events; aggregate at query time (full flexibility, high query cost)</span><span class="zh">存储原始事件；查询时聚合（完全灵活，查询成本高）</span></td>
+            <td><span class="en"><strong>Pre-aggregate</strong> for known metrics at known granularities; raw events in Kafka for ad-hoc replay only.</span><span class="zh"><strong>对已知粒度的已知指标预聚合</strong>；原始事件仅保留在 Kafka 供即席回放使用。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Data freshness vs cost</span><span class="zh">数据新鲜度 vs 成本</span></td>
+            <td><span class="en">Sub-second freshness — stream everything, no batching, expensive compute</span><span class="zh">亚秒级新鲜度——全量流处理，无批处理，计算成本高</span></td>
+            <td><span class="en">Micro-batch (5–30 s windows) — slightly stale but far cheaper; acceptable for dashboard use cases</span><span class="zh">微批处理（5–30 秒窗口）——略有延迟但成本低得多；满足仪表盘使用场景</span></td>
+            <td><span class="en"><strong>Micro-batch</strong> for OLAP rollups; truly real-time (seconds) only for the Redis serving cache hot path.</span><span class="zh"><strong>OLAP 汇总用微批处理</strong>；只有 Redis 服务缓存热路径才需要真正实时（秒级）。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Processing guarantee</span><span class="zh">处理语义保证</span></td>
+            <td><span class="en">At-least-once — simpler, faster, requires idempotent consumers to avoid double-count</span><span class="zh">至少一次——更简单、更快，需要幂等消费者避免重复计数</span></td>
+            <td><span class="en">Exactly-once — correct by construction for revenue, higher overhead (Flink checkpoints + transactional writes)</span><span class="zh">精确一次——收入天然正确，开销更高（Flink Checkpoint + 事务写入）</span></td>
+            <td><span class="en"><strong>Exactly-once for revenue metrics</strong> (non-negotiable); at-least-once + HLL for visitors (idempotent sketch merges).</span><span class="zh"><strong>收入指标必须精确一次</strong>（不可妥协）；访客指标用至少一次 + HLL（幂等草图合并）。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Hot/cold storage</span><span class="zh">冷热存储</span></td>
+            <td><span class="en">Keep all data in the OLAP hot store — simplest, but expensive at 2-year retention</span><span class="zh">全部保留在 OLAP 热存中——最简单，但 2 年保留期成本极高</span></td>
+            <td><span class="en">Tier old data to object storage (S3/GCS Parquet) — cheap but higher latency for historical queries</span><span class="zh">历史数据分层至对象存储（S3/GCS Parquet）——便宜，但历史查询延迟较高</span></td>
+            <td><span class="en"><strong>Tier at 90 days</strong>: hot OLAP for recent, Parquet + Presto for historical. Transparent to the dashboard via the Query API.</span><span class="zh"><strong>90 天分层</strong>：近期数据用热 OLAP，历史数据用 Parquet + Presto。通过 Query API 对仪表盘透明。</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问题目</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">How do you handle a late order event that falls outside the grace period and updates an already-served bucket?</span><span class="zh">如何处理超出宽限期、需要更新已服务桶的迟到订单事件？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Events beyond the watermark grace period go to a Flink side output. A separate micro-batch job periodically drains that side output, groups late events by <code>(shop_id, time_bucket)</code>, and submits targeted upsert jobs that recompute the affected rollup rows. The OLAP store's upsert is idempotent, keyed on <code>(shop_id, metric, time_bucket)</code>. If the dashboard is currently serving that bucket (e.g., a query for "yesterday's revenue"), the upsert propagates within the next cache TTL cycle. For revenue, this correction must always propagate; for visitor counts (HLL), the sketch is simply merged with the late event's contribution and re-serialized.</span><span class="zh">超出水印宽限期的事件进入 Flink 侧输出。一个独立的微批作业周期性地消费该侧输出，按 <code>(shop_id, time_bucket)</code> 分组迟到事件，并提交针对性 upsert 作业重计算受影响的汇总行。OLAP 存储的 upsert 是幂等的，以 <code>(shop_id, metric, time_bucket)</code> 为键。如果仪表盘当前正在服务该桶（例如查询"昨日收入"），修正值将在下一个缓存 TTL 周期内生效。对于收入，修正必须始终传播；对于访客计数（HLL），草图只需与迟到事件的贡献合并后重新序列化即可。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you guarantee exactly-once semantics for revenue so no order is double-counted?</span><span class="zh">如何保证收入的精确一次语义，确保没有订单被重复计数？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Two layers: (1) <strong>Flink exactly-once checkpointing</strong> — Flink uses a distributed snapshot algorithm (Chandy-Lamport variant). On restart, the job replays from the last checkpoint, re-consuming Kafka events from the committed offset. Combined with Kafka's consumer group offsets stored inside the checkpoint, this prevents re-processing events already committed. (2) <strong>Idempotent OLAP writes keyed by <code>event_id</code></strong> — even if Flink emits a duplicate rollup update (e.g., a partial window result followed by a final result), the OLAP upsert uses a deterministic key so the final value wins. The combination gives end-to-end exactly-once: no double-counting even across job restarts, network retries, or partial failures.</span><span class="zh">两层保障：(1) <strong>Flink 精确一次 Checkpoint</strong>——Flink 使用分布式快照算法（Chandy-Lamport 变体）。重启时，作业从最近的 Checkpoint 回放，从已提交的偏移量重新消费 Kafka 事件。结合存储在 Checkpoint 内部的 Kafka 消费者组偏移量，可防止重复处理已提交的事件。(2) <strong>以 <code>event_id</code> 为键的幂等 OLAP 写入</strong>——即使 Flink 发出重复的汇总更新（例如部分窗口结果后紧跟最终结果），OLAP upsert 使用确定性键，确保最终值获胜。两层结合提供端到端精确一次：即使跨作业重启、网络重试或部分故障，也不会重复计数。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A bug inflated revenue figures for 3 hours — how do you recompute the correct values?</span><span class="zh">一个 Bug 导致 3 小时的收入数据虚高——如何重新计算正确值？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">This is kappa replay: (1) identify the affected time range and the bug's root cause; (2) deploy a fixed version of the Flink aggregation job; (3) point the job at the Kafka event log, rewinding offsets to <code>now − 3 hours</code>; (4) run in "backfill mode" — the job recomputes rollup rows for the affected <code>(shop_id, metric, time_bucket)</code> tuples and upserts them into the OLAP store, overwriting the incorrect values; (5) the dashboard transparently picks up corrected data on the next cache refresh. Because the raw events are the source of truth and are retained in Kafka for 7 days, this recovery is always possible within the retention window. For incidents beyond 7 days, fall back to archived Parquet files in S3.</span><span class="zh">这正是 Kappa 回放的用武之地：(1) 确定受影响的时间范围和 Bug 根因；(2) 部署修复版本的 Flink 聚合作业；(3) 将作业指向 Kafka 事件日志，将偏移量倒回至 <code>now − 3 hours</code>；(4) 以"回填模式"运行——作业重计算受影响的 <code>(shop_id, metric, time_bucket)</code> 元组的汇总行，并 upsert 到 OLAP 存储，覆盖错误值；(5) 仪表盘在下次缓存刷新时自动获取修正后的数据。由于原始事件是真实数据源且在 Kafka 中保留 7 天，此恢复在保留窗口内始终可行。超过 7 天的事故则回退到 S3 中归档的 Parquet 文件。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How does the system handle extreme cardinality — 10M+ shops × metrics × time buckets?</span><span class="zh">系统如何应对极高基数——1000 万以上店铺 × 指标 × 时间桶？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three levers: (1) <strong>Sparse writes</strong> — only write rollup rows for (shop, metric, bucket) tuples with non-zero values. Most shops are inactive most minutes; sparse storage cuts volume by 100–1000×. (2) <strong>Shop-level partitioning</strong> in all layers (Kafka, Flink, OLAP) ensures single-shop queries never require cross-partition scatter-gather. (3) <strong>OLAP columnar compression</strong> — ClickHouse/Druid compress repeated <code>shop_id</code> and <code>metric</code> columns with dictionary encoding at 10–50× compression ratio, so the actual storage footprint is far smaller than the raw row count suggests. For whale shops generating outsized event volume, dedicate Kafka partitions and Flink task slots to prevent head-of-line blocking for other shops.</span><span class="zh">三大手段：(1) <strong>稀疏写入</strong>——只为非零值的（店铺、指标、桶）元组写入汇总行。大多数店铺在大多数分钟内没有活动，稀疏存储将数据量减少 100–1000 倍。(2) <strong>所有层按店铺分区</strong>（Kafka、Flink、OLAP），确保单店铺查询无需跨分区散列聚合。(3) <strong>OLAP 列式压缩</strong>——ClickHouse/Druid 对重复的 <code>shop_id</code> 和 <code>metric</code> 列使用字典编码，压缩比达 10–50 倍，实际存储占用远小于原始行数所暗示的大小。对于产生超大事件量的巨鲸店铺，分配专用 Kafka 分区和 Flink 任务槽，防止其阻塞其他店铺的聚合窗口。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">The dashboard shows a query spike at 9am — how do you protect the OLAP cluster?</span><span class="zh">仪表盘在早 9 点出现查询峰值——如何保护 OLAP 集群？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Two-layer defence: (1) <strong>Pre-aggregated rollups</strong> mean that common dashboard queries (e.g., "today's revenue by hour") translate to a narrow OLAP scan over pre-computed rows, not a raw event scan — inherently fast even under load. (2) <strong>Query-layer caching</strong> — the Query API maintains a short-lived (60-second) per-shop per-query result cache. Dashboard refreshes within the cache window are served from memory without hitting the OLAP store. For the live strip, the Redis cache (TTL 5–30 seconds) absorbs all sub-minute refresh load entirely. If the OLAP cluster shows CPU pressure, add read replicas — ClickHouse and Druid both support horizontal read scaling.</span><span class="zh">两层防御：(1) <strong>预聚合汇总</strong>意味着常见的仪表盘查询（如"今日按小时分布的收入"）转换为对预计算行的窄范围 OLAP 扫描，而非原始事件扫描——即使在高负载下也天然很快。(2) <strong>查询层缓存</strong>——Query API 为每个店铺的每个查询维护短生命周期（60 秒）结果缓存。缓存窗口内的仪表盘刷新直接从内存服务，无需访问 OLAP 存储。对于实时展示条，Redis 缓存（TTL 5–30 秒）完全吸收所有分钟内的刷新负载。若 OLAP 集群出现 CPU 压力，增加读副本即可——ClickHouse 和 Druid 均支持水平读扩展。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you balance data freshness vs infrastructure cost as the platform scales?</span><span class="zh">随着平台规模增长，如何在数据新鲜度与基础设施成本之间取得平衡？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Freshness is not free — sub-second freshness requires always-on streaming compute, whereas 5-minute micro-batch costs ~10× less for the same event volume. The right balance depends on the use case: (a) the <strong>live strip</strong> (current visitors, today's revenue) genuinely needs seconds of freshness because merchants are watching it during a sale — spend the compute here. (b) <strong>Historical charts</strong> (7-day trend, top products) are refreshed at most every few minutes; a micro-batch pipeline that emits hourly or 5-minute rollups is sufficient and much cheaper. (c) <strong>Tiered storage</strong> — move data older than 90 days to S3 Parquet and query it with Presto/Trino; the vast majority of storage cost is in historical data, not real-time state. As scale grows, the key cost lever is increasing batch granularity for less time-critical metrics and tightening the hot-store retention window.</span><span class="zh">新鲜度不是免费的——亚秒级新鲜度需要持续运行的流处理计算，而 5 分钟微批处理对相同事件量的成本约低 10 倍。合理平衡取决于使用场景：(a) <strong>实时展示条</strong>（当前访客、今日收入）确实需要秒级新鲜度，因为商家在促销期间会实时盯着它——在这里值得投入计算资源。(b) <strong>历史图表</strong>（7 天趋势、热销商品）最多每几分钟刷新一次；以小时或 5 分钟为粒度发出汇总的微批流水线已经足够，而且成本低得多。(c) <strong>分层存储</strong>——将 90 天以上的数据移至 S3 Parquet，用 Presto/Trino 查询；绝大部分存储成本在历史数据，而非实时状态。随着规模增长，降低成本的关键杠杆是为时效要求较低的指标增大批处理粒度，并收紧热存保留窗口。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you backfill a brand-new metric over historical data?</span><span class="zh">如何对历史数据回填一个全新的指标？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Replay the immutable Kafka event log through a new or updated Flink stream job that computes the new rollup. Because raw events are retained (up to 7 days in Kafka; longer in a cold S3/Parquet archive), you simply rewind the consumer offsets to the desired start timestamp and let the job run in "batch replay" mode at full throughput. Write the new rollup rows with an idempotent upsert keyed on <code>(shop_id, metric, time_bucket)</code> so re-runs are safe. The replay job runs at lower priority alongside the live stream job without blocking real-time processing. For backfills beyond the Kafka retention window, read from the archived Parquet cold store as the source instead.</span><span class="zh">将不可变的 Kafka 事件日志通过新建或更新的 Flink 流作业重放，由该作业计算新的汇总指标。由于原始事件已持久化（Kafka 保留最多 7 天，冷存 S3/Parquet 则更长），只需将消费者偏移量倒回目标起始时间戳，以"批量回放"模式全速运行即可。使用以 <code>(shop_id, metric, time_bucket)</code> 为键的幂等 upsert 写入新汇总行，保证重复执行不会产生副作用。回放作业以较低优先级与实时流作业并行运行，不阻塞实时处理。若回填时间超出 Kafka 保留窗口，则改用归档的 Parquet 冷存作为数据源。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A merchant disputes "today's sales" — how do you make it auditable and explainable?</span><span class="zh">商家对"今日销售额"提出质疑——如何让数据可审计、可解释？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The revenue pipeline is designed for exactly-once + idempotent processing, so every order contributes exactly one increment keyed by its <code>event_id</code>. This means the OLAP rollup is deterministically derived from the immutable event log. To explain or audit a disputed figure: (1) look up all <code>order_event</code> records for the shop and the disputed time window in the raw Kafka log (or S3 archive); (2) re-derive the revenue total by summing <code>revenue_cents</code> — the result should match the dashboard exactly; (3) reconcile against the orders table in the transactional store (Postgres) to confirm no order was missed or double-counted. Because the event log is the source of truth and writes are idempotent on <code>event_id</code>, this audit trail is always reproducible without any special audit infrastructure.</span><span class="zh">收入处理流水线采用精确一次（exactly-once）+ 幂等处理设计，每笔订单以其 <code>event_id</code> 为键，只对汇总值贡献一次增量。这意味着 OLAP 汇总结果可从不可变事件日志中确定性地推导出来。要解释或审计有争议的数字：(1) 在原始 Kafka 日志（或 S3 归档）中查找该店铺争议时间窗口内的所有 <code>order_event</code> 记录；(2) 对 <code>revenue_cents</code> 求和，重新推算收入总额——结果应与仪表盘完全一致；(3) 与事务型存储（Postgres）中的订单表比对，确认无订单遗漏或重复计算。由于事件日志是唯一数据源且写入以 <code>event_id</code> 保证幂等性，无需专用审计基础设施即可随时重现审计结果。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you handle timezone boundaries for "today" across a global merchant base?</span><span class="zh">如何处理全球商家群体中"今天"的时区边界问题？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">All events are ingested and stored with UTC timestamps — the event log never contains local time. Timezone conversion happens at aggregation or query time. Each shop has a configured timezone stored in the merchant profile. When Flink emits a daily rollup bucket for a shop, it truncates the event's UTC timestamp to the shop's local day boundary (e.g., midnight PST = 08:00 UTC) using the shop's IANA timezone string. Dashboard queries for "today" similarly translate the shop's current local midnight to UTC before querying the OLAP store. This means two shops in different timezones have correctly isolated "today" buckets without any data duplication. The golden rule: store in UTC everywhere; apply timezone only at the output boundary.</span><span class="zh">所有事件摄入时均使用 UTC 时间戳存储——事件日志中从不包含本地时间。时区转换在聚合或查询时进行。每个店铺在商家档案中配置了自己的时区。Flink 为某店铺生成每日汇总桶时，使用店铺的 IANA 时区字符串将事件的 UTC 时间戳截断到该店铺当地的"天"边界（例如太平洋时间午夜 = UTC 08:00）。仪表盘查询"今天"时，同样先将该店铺当地今日零时转换为 UTC，再查询 OLAP 存储。这样，不同时区的两个店铺各自拥有正确隔离的"今天"桶，数据不会重复。黄金原则：全程以 UTC 存储；仅在输出边界才应用时区。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Bot and fraud traffic skews pageview metrics — how do you filter it?</span><span class="zh">爬虫和刷量流量导致页面浏览指标失真——如何过滤？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Bot classification happens at ingest, before events hit the aggregation layer. The storefront edge (CDN) applies lightweight heuristics (user-agent strings, IP reputation lists, request rate signatures) and stamps each <code>pageview_event</code> with a <code>bot_score</code> field. A second, richer classification model can run asynchronously on a separate Kafka consumer — when it flags a session, it emits a <code>session_flagged</code> event. The stream processor maintains two parallel streams: a <strong>raw</strong> stream (all traffic, useful for capacity planning and debugging) and a <strong>cleaned</strong> stream (bot sessions filtered out, used for merchant-facing metrics). Rollup tables include a <code>stream</code> column (<code>raw</code> vs <code>cleaned</code>) so the Query API can select the right view per use case. This separation is preferable to filtering in place: you never irreversibly discard data, and you can retroactively re-classify sessions as signals improve.</span><span class="zh">爬虫分类在摄入阶段进行，发生在事件进入聚合层之前。CDN 边缘节点通过轻量级启发式规则（User-Agent 字符串、IP 声誉库、请求频率特征）对每个 <code>pageview_event</code> 打上 <code>bot_score</code> 分数。更复杂的分类模型可在独立 Kafka 消费者上异步运行——当某个会话被标记时，发出 <code>session_flagged</code> 事件。流处理器维护两条并行数据流：<strong>原始流</strong>（全部流量，用于容量规划和调试）和<strong>清洗流</strong>（过滤掉爬虫会话，用于商家可见指标）。汇总表中包含 <code>stream</code> 列（<code>raw</code> 或 <code>cleaned</code>），Query API 可按用途选择对应视图。这种分离优于就地过滤：数据从不被不可逆地丢弃，且随着信号改进，可以对历史会话重新分类。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you evolve the event schema without breaking the pipeline?</span><span class="zh">如何在不破坏流水线的前提下演进事件 Schema？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Schema evolution is managed through a <strong>schema registry</strong> (e.g., Confluent Schema Registry with Avro or Protobuf). Producers register a versioned schema before emitting events; the registry enforces backward-compatible changes only — you can add optional fields with defaults, but you cannot remove fields or change types. Flink consumers use <strong>tolerant reader</strong> logic: unknown fields are ignored, missing optional fields use defaults. This means an old job version can safely read new events and vice versa, enabling zero-downtime rolling upgrades. Events carry a <code>schema_version</code> header so downstream consumers can branch on version when a breaking change is truly necessary (rare). Breaking changes require a versioned topic migration: produce to both the old and new topic during the transition window, then cut over consumers and retire the old topic. The golden rule: treat the event schema as a public API — additive changes only; breaking changes are a two-phase migration.</span><span class="zh">通过 <strong>Schema 注册表</strong>（例如 Confluent Schema Registry，配合 Avro 或 Protobuf）管理 Schema 演进。生产者在发出事件前先向注册表登记带版本号的 Schema；注册表只允许向后兼容的变更——可添加带默认值的可选字段，但不可删除字段或变更类型。Flink 消费者采用<strong>容错读取器</strong>逻辑：未知字段直接忽略，缺失的可选字段使用默认值。这使得旧版本作业可安全读取新事件，反之亦然，从而实现零停机滚动升级。事件携带 <code>schema_version</code> 头部字段，当确实需要破坏性变更时（极少见），下游消费者可按版本分支处理。破坏性变更需要进行版本化的 Topic 迁移：在过渡期同时向旧 Topic 和新 Topic 写入，待消费者切换完成后再下线旧 Topic。黄金原则：将事件 Schema 视为公开 API——只做增量变更；破坏性变更必须走两阶段迁移。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you cap OLAP storage cost as metric cardinality grows?</span><span class="zh">随着指标基数增长，如何控制 OLAP 存储成本？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Several complementary levers: (1) <strong>Pre-aggregate at ingest</strong> — Flink writes per-minute rollup rows rather than raw events; this is already a 100–1000× reduction vs raw event storage. (2) <strong>TTL + hot/cold tiering</strong> — the OLAP store holds only the last 90 days in NVMe hot storage; older data is exported to Parquet on S3/GCS (cold), queryable via Presto/Trino at higher latency. (3) <strong>Coarser granularity for old data</strong> — automatically downsample per-minute rollups to per-hour after 7 days, and to per-day after 30 days. This trades query flexibility for storage: per-minute granularity is only valuable for recent data. (4) <strong>Drop raw events after retention</strong> — Kafka's 7-day retention policy means raw events are automatically evicted; only the downstream rollups are stored long-term. (5) <strong>Sparse writes</strong> — skip writing rollup rows for inactive (shop, metric, bucket) combinations with zero values. Together these levers keep the OLAP storage footprint at the level of aggregated insight, not raw event volume.</span><span class="zh">可以结合多种互补手段：(1) <strong>摄入时预聚合</strong>——Flink 写入每分钟汇总行而非原始事件，与原始事件存储相比已减少 100-1000 倍。(2) <strong>TTL + 冷热分层</strong>——OLAP 存储仅在 NVMe 热存中保留最近 90 天数据；更旧的数据导出为 S3/GCS 上的 Parquet（冷存），可通过 Presto/Trino 以更高延迟查询。(3) <strong>对历史数据降低粒度</strong>——自动将每分钟汇总在 7 天后降采样为每小时，30 天后再降为每天。这以牺牲查询灵活性换取存储节约：分钟级粒度仅对近期数据有价值。(4) <strong>保留期后丢弃原始事件</strong>——Kafka 的 7 天保留策略自动淘汰原始事件；长期存储的只有下游汇总数据。(5) <strong>稀疏写入</strong>——对无活动（店铺、指标、桶）组合跳过写入零值汇总行。综合以上手段，OLAP 存储开销保持在聚合洞察的水平，而非原始事件的量级。</span></p>
+          </div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these five things in order</span><span class="zh">Staff 级总结——按顺序说出这五点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li class="en"><strong>Pick consistency per metric</strong>: exact revenue via exactly-once processing + idempotent writes keyed by event_id; approximate unique visitors via HyperLogLog (1000× memory savings, mergeable for rollups). Stating this split early marks staff thinking.</li>
+          <li class="zh"><strong>按指标选择一致性级别</strong>：收入用精确一次处理 + 以 event_id 为键的幂等写入；独立访客用 HyperLogLog（节省 1000 倍内存，可合并用于汇总）。尽早说出这一区分是 Staff 级思维的标志。</li>
+          <li class="en"><strong>Kappa over Lambda</strong>: a single stream pipeline with replay from the Kafka event log beats Lambda's dual code paths. Duplicate logic diverges precisely when accuracy matters most. Kappa's replay is the "undo button" for pipeline bugs.</li>
+          <li class="zh"><strong>Kappa 优于 Lambda</strong>：从 Kafka 事件日志回放的单一流处理流水线优于 Lambda 的双代码路径。重复逻辑恰恰在最需要准确性时产生分歧。Kappa 的回放是流水线 Bug 的"撤销按钮"。</li>
+          <li class="en"><strong>OLAP columnar store for sub-second multi-tenant group-by</strong>: pre-aggregate rollups in Flink at ingest, write to ClickHouse/Druid/Pinot. Never serve dashboard queries from OLTP. The OLAP store's columnar layout + pre-rollup is what makes sub-second latency achievable at millions-of-shops cardinality.</li>
+          <li class="zh"><strong>OLAP 列式存储用于亚秒级多租户 group-by</strong>：在 Flink 摄入时预聚合汇总，写入 ClickHouse/Druid/Pinot。永远不要从 OLTP 服务仪表盘查询。OLAP 存储的列式布局 + 预汇总是在数百万店铺基数下实现亚秒级延迟的关键。</li>
+          <li class="en"><strong>Watermarks + grace for late data; replay for corrections</strong>: a 60-second grace period handles most real-world delivery jitter. Late events beyond the grace trigger targeted bucket recompute. Pipeline bugs trigger full replay from the Kafka log — name this path explicitly.</li>
+          <li class="zh"><strong>水印 + 宽限期处理迟到数据；回放用于修正</strong>：60 秒宽限期处理现实中大多数传输抖动。超出宽限期的迟到事件触发针对性桶重计算。流水线 Bug 触发从 Kafka 日志的全量回放——明确说出这条路径。</li>
+          <li class="en"><strong>Tier hot/cold to control cost</strong>: keep 90 days in the OLAP hot store; archive to S3 Parquet for historical. Sparse writes (only non-zero buckets) cut storage 100–1000×. The live strip (seconds freshness) and historical charts (minutes acceptable) have different SLAs — serve them from different layers accordingly.</li>
+          <li class="zh"><strong>冷热分层控制成本</strong>：OLAP 热存保留 90 天；历史数据归档至 S3 Parquet。稀疏写入（只写非零桶）节省 100–1000 倍存储。实时展示条（秒级新鲜度）与历史图表（分钟级可接受）有不同的 SLA——相应地从不同层提供服务。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (analytics pipeline, event-driven architecture)</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview guide</a></li>
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">Interview Query — Shopify software engineer interview guide</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="09_notification_system.html">← 09 · <span class="en">Notification System</span><span class="zh">通知系统</span></a> &nbsp;·&nbsp; <a href="index.html"><span class="en">Back to all questions →</span><span class="zh">返回题目列表 →</span></a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

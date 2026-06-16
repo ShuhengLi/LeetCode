@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · Global Inventory Management — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 02 · <span class="en">Inventory</span><span class="zh">库存管理</span></span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← <span class="en">All questions</span><span class="zh">全部题目</span></a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">This question</span><span class="zh">本题目录</span></h4>
+    <a href="#reqs"><span class="n">1</span> <span class="en">Clarify</span><span class="zh">需求澄清</span></a>
+    <a href="#est"><span class="n">2</span> <span class="en">Estimate</span><span class="zh">容量估算</span></a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> <span class="en">Data model</span><span class="zh">数据模型</span></a>
+    <a href="#arch"><span class="n">5</span> <span class="en">Architecture</span><span class="zh">系统架构</span></a>
+    <a href="#deep"><span class="n">6</span> <span class="en">Deep dives</span><span class="zh">深入探讨</span></a>
+    <a href="#trade"><span class="n">7</span> <span class="en">Trade-offs</span><span class="zh">权衡取舍</span></a>
+    <a href="#follow"><span class="n">8</span> <span class="en">Follow-ups</span><span class="zh">追加问题</span></a>
+    <h4><span class="en">Navigate</span><span class="zh">导航</span></h4>
+    <a href="index.html"><span class="n">←</span> <span class="en">Index</span><span class="zh">首页</span></a>
+    <a href="03_checkout_payments.html"><span class="n">→</span> 03 <span class="en">Checkout</span><span class="zh">结账支付</span></a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 1 · Signature · ★★★★★</div>
+      <h1><span class="en">Design a Global Inventory Management System</span><span class="zh">设计全球库存管理系统</span></h1>
+      <p>
+        <span class="en">"Track stock for products across hundreds of warehouses and retail stores, synced to every sales channel — online, POS, Amazon, eBay — in near-real-time. <strong>Never oversell. Never phantom-out-of-stock.</strong> This is the correctness problem at the heart of Shopify."</span>
+        <span class="zh">"跨数百个仓库与门店追踪商品库存,近实时同步到所有销售渠道——线上商店、POS、Amazon、eBay。<strong>绝不超卖,绝不虚假缺货。</strong>这是 Shopify 核心的正确性问题。"</span>
+      </p>
+      <div class="meta">
+        <span class="chip">📍 <span class="en">Seen: staff + senior eng loops</span><span class="zh">出现于：Staff / Senior 面试轮次</span></span>
+        <span class="chip">🎯 <span class="en">Tests: consistency models + audit</span><span class="zh">考察：一致性模型 + 审计追踪</span></span>
+        <span class="chip">⏱ 60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why Shopify loves this one</span><span class="zh">为什么 Shopify 特别喜欢这道题</span></span>
+      <span class="en">Inventory is where money meets reality. Every sale, return, transfer, and marketplace sync touches this system. The duality interviewers probe: protect merchants from <strong>overselling</strong> (angry customers, chargebacks, cancellations) <em>and</em> from <strong>phantom out-of-stock</strong> (a cache says "0" but the shelf has 20, losing sales). Getting both right simultaneously — under high read QPS, multi-channel concurrency, and millions of multi-tenant shops — is the whole challenge.</span>
+      <span class="zh">库存是金钱与现实交汇的地方。每一笔销售、退货、调拨和渠道同步都经过这个系统。面试官考察的两难困境是：既要保护商家不<strong>超卖</strong>（避免客户投诉、退款、取消订单），又要防止<strong>虚假缺货</strong>（缓存显示"0"但货架上还有 20 件，白白损失销售额）。在高读取 QPS、多渠道并发以及数百万多租户商店的条件下同时做对两件事——这就是全部挑战所在。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub">~7 min · <span class="en">ask, don't assume</span><span class="zh">多问，不要假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Query available quantity per product variant per location.</span><span class="zh">按商品变体、按仓库位置查询可售数量。</span></li>
+            <li><span class="en">Adjust stock: receive goods, process sales, handle returns, manual edits.</span><span class="zh">调整库存：收货、处理销售、退货处理、手动编辑。</span></li>
+            <li><span class="en"><strong>Reserve / commit / release</strong> lifecycle for checkout holds.</span><span class="zh">结账预留的 <strong>预留 / 提交 / 释放</strong> 生命周期。</span></li>
+            <li><span class="en">Transfer inventory between locations (warehouse → store).</span><span class="zh">跨位置调拨库存（仓库 → 门店）。</span></li>
+            <li><span class="en">Multi-channel sync: online store, POS, Amazon, eBay push/pull.</span><span class="zh">多渠道同步：线上商店、POS、Amazon、eBay 推/拉。</span></li>
+            <li><span class="en">Full audit trail — every change must be traceable to a reason and actor.</span><span class="zh">完整审计追踪——每次变更必须能溯源到原因和操作者。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>Never oversell</strong> — strong consistency on the decrement path.</span><span class="zh"><strong>绝不超卖</strong>——扣减路径强一致性。</span></li>
+            <li><span class="en"><strong>High availability for reads</strong> — storefront PDPs must never 503.</span><span class="zh"><strong>读取高可用</strong>——店面商品详情页绝不能 503。</span></li>
+            <li><span class="en">Near-real-time propagation — changes reflect across channels in &lt; a few seconds.</span><span class="zh">近实时传播——变更在数秒内同步到所有渠道。</span></li>
+            <li><span class="en">Multi-tenant scale — millions of shops, highly skewed (a few giants, millions of smalls).</span><span class="zh">多租户规模——数百万商店，高度倾斜（少数巨头，海量小店）。</span></li>
+            <li><span class="en">Full auditability — every stock movement traceable; supports reconciliation and replay.</span><span class="zh">完整可审计性——每次库存变动可追溯；支持对账和重放。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to actually ask out loud</span><span class="zh">面试时应大声提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Is overselling <em>ever</em> acceptable? (backorders? pre-orders?) — changes whether available can go negative.</span><span class="zh">超卖是否<em>任何时候</em>都不可接受？（支持缺货预订或预购吗？）——这决定 available 能否为负数。</span></li>
+          <li><span class="en">How many locations per merchant? A boutique has one; a large retailer may have thousands.</span><span class="zh">每个商家有多少个仓库位置？精品店可能只有一个；大型零售商可能有数千个。</span></li>
+          <li><span class="en">Which external channels must be supported, and do they <em>pull</em> (poll our API) or get <em>pushed</em> (webhooks)? Affects fan-out cost.</span><span class="zh">需要支持哪些外部渠道，它们是<em>拉取</em>（轮询我们的 API）还是接收<em>推送</em>（webhook）？影响扇出成本。</span></li>
+          <li><span class="en">Does a cart <strong>reserve</strong> stock, or only a confirmed checkout? This is the single biggest design fork.</span><span class="zh">加购物车时是否<strong>预留</strong>库存，还是只在确认结账时才预留？这是最关键的设计分叉点。</span></li>
+          <li><span class="en">What is the return / restock flow — does a return immediately increment available, or go to a "quarantine" bin?</span><span class="zh">退货/补货流程是怎样的——退货后是否立即增加 available，还是先进"隔离区"等待验货？</span></li>
+          <li><span class="en">Accuracy SLA: is "available within 5 seconds" acceptable for external channels? Is it 99.9% or 99.99% for the own-store checkout?</span><span class="zh">精度 SLA：外部渠道"5 秒内可用"是否可接受？自家结账路径是 99.9% 还是 99.99% 的可用性要求？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找出真正的瓶颈</span></span></div>
+      <p><span class="en">The key insight: <strong>reads dwarf writes by ~10–100×.</strong> Storefront product-detail-page (PDP) loads and checkout availability checks are constant; inventory adjustments happen only when stock actually moves. Protect the write path; serve the read path from cache.</span><span class="zh">关键洞察：<strong>读取量是写入量的 10–100 倍。</strong>店面商品详情页（PDP）加载和结账可用性检查持续不断；库存调整只在库存实际变动时才发生。保护写入路径；从缓存服务读取路径。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">~1B</div><div class="l"><span class="en">total variants on platform</span><span class="zh">平台上的商品变体总数</span></div></div>
+        <div class="kpi"><div class="v">~500k</div><div class="l"><span class="en">inventory-read QPS (PDP + checkout)</span><span class="zh">库存读取 QPS（PDP + 结账）</span></div></div>
+        <div class="kpi"><div class="v">~50k</div><div class="l"><span class="en">write/adjust QPS (peak)</span><span class="zh">写入/调整 QPS（峰值）</span></div></div>
+        <div class="kpi"><div class="v">&lt;5 s</div><div class="l"><span class="en">propagation SLA across channels</span><span class="zh">跨渠道传播 SLA</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en"><strong>Read path:</strong> 500k QPS against the DB is unacceptable. Redis cache of hot available counts is mandatory. A CDN cannot cache per-variant per-user availability, but a regional Redis cluster can serve the display count with a short TTL.</span><span class="zh"><strong>读取路径：</strong>500k QPS 直打数据库不可接受。热点 available 数值的 Redis 缓存是必须的。CDN 无法缓存每个变体每个用户的可用性，但区域 Redis 集群可以用短 TTL 提供展示计数。</span></li>
+        <li><span class="en"><strong>Write path:</strong> 50k adjustments/s is moderate. A sharded SQL cluster (sharded by <code>shop_id</code>) handles this comfortably — but the hot-SKU problem (one variant, a million concurrent buyers) requires special treatment (see deep dive ②).</span><span class="zh"><strong>写入路径：</strong>每秒 5 万次调整量属于中等水平。按 <code>shop_id</code> 分片的 SQL 集群可以轻松应对——但热点 SKU 问题（一个变体面对百万并发买家）需要特殊处理（见深挖 ②）。</span></li>
+        <li><span class="en"><strong>Storage:</strong> 1B variants × ~5 locations each = 5B <code>inventory_level</code> rows; a level row is a handful of integer columns (~100 B), so ≈ 0.5 TB for the level table. Ledger grows unboundedly — partition by date and archive to cold storage.</span><span class="zh"><strong>存储：</strong>10 亿变体 × 约 5 个位置 = 50 亿条 <code>inventory_level</code> 记录；每条记录只有几个整数列（约 100 B），因此 level 表约 0.5 TB。流水账（ledger）无限增长——按日期分区并归档到冷存储。</span></li>
+        <li><span class="en"><strong>Multi-tenancy skew:</strong> top 1% of merchants generate ~80% of writes. Shard key = <code>shop_id</code> isolates hot merchants from small ones and allows per-shop rate limiting.</span><span class="zh"><strong>多租户倾斜：</strong>头部 1% 的商家产生约 80% 的写入。分片键 = <code>shop_id</code> 将热点商家与小商家隔离，并允许按商家限流。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct">⭐ <span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">State explicitly: <em>"Reads are 10–100× writes. I'll serve reads from a CDC-invalidated Redis cache and reserve the DB write path exclusively for actual stock movements. The database is not a read replica for storefronts."</em></span>
+        <span class="zh">明确说出：<em>"读取量是写入量的 10–100 倍。我会用 CDC 失效的 Redis 缓存服务读取请求，把数据库写入路径专门留给实际库存变动。数据库不是店面的只读副本。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row"><span class="method get">GET</span><span class="path">/inventory/{variantId}/levels?locationId=…</span><span class="desc">Returns on_hand, committed, reserved, available per location</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/inventory/{variantId}/adjust</span><span class="desc">{locationId, delta, reason, ref} — receive / sell / return / manual edit</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/inventory/reserve</span><span class="desc">{variantId, locationId, qty, ttl} → {reservationId, expiresAt}</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/inventory/commit</span><span class="desc">{reservationId} — converts reservation to a fulfilled sale</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/inventory/release</span><span class="desc">{reservationId} — cancels hold (abandoned cart / failed payment)</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/inventory/transfer</span><span class="desc">{variantId, fromLocationId, toLocationId, qty} — in-transit ledger</span></div>
+      </div>
+      <p><span class="en">All mutating endpoints accept an <strong><code>idempotency-key</code> header</strong> — the adjust, reserve, and commit operations must be safe to retry without double-counting. The GET endpoint reads from cache first (Redis) with a DB fallback; the cache is the display truth, the DB is the commit truth.</span><span class="zh">所有变更接口均接受 <strong><code>idempotency-key</code> 请求头</strong>——调整、预留和提交操作必须可安全重试而不重复计数。GET 接口优先读取缓存（Redis），未命中时回退到数据库；缓存是展示真相，数据库是提交真相。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Core tables (MySQL / Postgres — sharded by shop_id)</span><span class="zh">核心表（MySQL / Postgres — 按 shop_id 分片）</span></h4>
+      <pre><code><span class="c">-- Materialized current state; PK is composite</span>
+<span class="k">inventory_level</span>(
+  variant_id   <span class="s">BIGINT</span>  <span class="c">-- FK to product variant</span>,
+  location_id  <span class="s">BIGINT</span>  <span class="c">-- warehouse / store</span>,
+  on_hand      <span class="n">INT</span>     <span class="c">-- physically present</span>,
+  committed    <span class="n">INT</span>     <span class="c">-- placed orders not yet shipped</span>,
+  reserved     <span class="n">INT</span>     <span class="c">-- checkout holds not yet committed</span>,
+  <span class="c">-- available is DERIVED: on_hand - committed - reserved</span>
+  version      <span class="n">BIGINT</span>  <span class="c">-- optimistic concurrency stamp</span>,
+  updated_at   <span class="s">TIMESTAMP</span>,
+  <span class="k">PRIMARY KEY</span> (variant_id, location_id)
+)
+
+<span class="c">-- Checkout hold; TTL enforced by expiry worker</span>
+<span class="k">reservation</span>(
+  id           <span class="s">UUID PRIMARY KEY</span>,
+  variant_id   <span class="s">BIGINT</span>,
+  location_id  <span class="s">BIGINT</span>,
+  qty          <span class="n">INT</span>,
+  status       <span class="s">ENUM('active','committed','released','expired')</span>,
+  expires_at   <span class="s">TIMESTAMP</span>,
+  created_at   <span class="s">TIMESTAMP</span>
+)
+
+<span class="c">-- Append-only audit log; never UPDATE, never DELETE</span>
+<span class="k">inventory_ledger</span>(
+  id           <span class="s">BIGINT AUTO_INCREMENT PRIMARY KEY</span>,
+  variant_id   <span class="s">BIGINT</span>,
+  location_id  <span class="s">BIGINT</span>,
+  delta        <span class="n">INT</span>     <span class="c">-- signed: +recv, -sell, +return</span>,
+  reason       <span class="s">ENUM('receive','sale','return','manual','transfer_out','transfer_in')</span>,
+  ref          <span class="s">VARCHAR(128)</span> <span class="c">-- order_id / PO number / transfer_id</span>,
+  actor        <span class="s">VARCHAR(64)</span>  <span class="c">-- user / system / channel</span>,
+  created_at   <span class="s">TIMESTAMP</span>
+  <span class="c">-- partitioned by MONTH(created_at) for archival</span>
+)</code></pre>
+      <h4><span class="en">Hot cache (Redis — per-location available count)</span><span class="zh">热点缓存（Redis — 按位置存储 available 计数）</span></h4>
+      <pre><code><span class="n">inv:{variantId}:{locationId}:avail</span>  <span class="c">// INT, TTL 60 s, CDC-invalidated</span>
+<span class="n">inv:{variantId}:{locationId}:v</span>       <span class="c">// version stamp for optimistic check</span>
+<span class="n">res:{reservationId}</span>                  <span class="c">// reservation state for fast lookup</span></code></pre>
+      <p><span class="en"><code>available</code> is a <strong>derived</strong> column — <code>on_hand − committed − reserved</code>. Storing it explicitly risks drift; the pattern here materializes it in cache from the DB source of truth. The ledger is append-only: <em>never</em> update a past row.</span><span class="zh"><code>available</code> 是一个<strong>派生</strong>列——<code>on_hand − committed − reserved</code>。直接存储它有数据漂移的风险；这里的模式是从数据库真相出发在缓存中物化它。流水账（ledger）是只追加的：<em>永远不要</em>更新历史行。</span></p>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">three flows, drawn apart</span><span class="zh">三条流，分开画</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 600" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#008060"/>
+            </marker>
+            <marker id="ahq" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- ── REQUEST FLOW (spine, grey) ── -->
+          <!-- Clients down to Inventory Service -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <line x1="260" y1="60"  x2="260" y2="88"/>
+            <line x1="260" y1="138" x2="260" y2="166"/>
+            <!-- read path: Inventory Svc → Redis cache -->
+            <line x1="358" y1="210" x2="440" y2="210"/>
+            <!-- cache miss → primary DB (down) -->
+            <line x1="260" y1="244" x2="260" y2="282"/>
+          </g>
+
+          <!-- ── DATA FLOW (green) ── -->
+          <!-- Write: Inventory Svc → Primary DB (conditional UPDATE) -->
+          <g stroke="#008060" stroke-width="1.6" fill="none" marker-end="url(#ahg)">
+            <line x1="250" y1="244" x2="250" y2="282" stroke="#008060"/>
+            <!-- Primary → Ledger -->
+            <line x1="260" y1="346" x2="260" y2="384"/>
+          </g>
+
+          <!-- ── EVENT FLOW (orange dashed) ── -->
+          <!-- DB → CDC → Kafka -->
+          <g stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ahq)">
+            <line x1="310" y1="314" x2="440" y2="314"/>
+          </g>
+          <!-- Kafka → fan-out workers (down) -->
+          <g stroke="#ea580c" stroke-width="1.5" fill="none" marker-end="url(#ahq)">
+            <line x1="520" y1="344" x2="520" y2="384"/>
+          </g>
+          <!-- Kafka → Search index -->
+          <g stroke="#ea580c" stroke-width="1.5" fill="none" marker-end="url(#ahq)">
+            <line x1="560" y1="314" x2="640" y2="314"/>
+          </g>
+
+          <!-- Expiry worker INCRBY back to DB (dashed feedback) -->
+          <path d="M520,450 L520,470 L160,470 L160,344" stroke="#ea580c" stroke-width="1.5"
+                stroke-dasharray="5 4" fill="none" marker-end="url(#ahq)"/>
+          <text x="340" y="482" font-size="10" fill="#ea580c" text-anchor="middle">reservation expiry → release qty back to on_hand</text>
+
+          <!-- ── NODES ── -->
+
+          <!-- Clients -->
+          <rect x="165" y="12" width="190" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+          <text x="260" y="34"  text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Clients (Storefront / POS)</text>
+          <text x="260" y="51"  text-anchor="middle" font-size="10.5" fill="#64748b">read-heavy: PDP, checkout, admin</text>
+
+          <!-- API Gateway -->
+          <rect x="165" y="88" width="190" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+          <text x="260" y="109" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">API Gateway</text>
+          <text x="260" y="126" text-anchor="middle" font-size="10.5" fill="#2563eb">auth · rate-limit · routing</text>
+
+          <!-- Inventory Service -->
+          <rect x="165" y="166" width="190" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="260" y="188" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Inventory Service</text>
+          <text x="260" y="205" text-anchor="middle" font-size="10.5" fill="#008060">read / write / reserve / commit</text>
+
+          <!-- Redis Cache (right of Inventory Svc) -->
+          <rect x="440" y="186" width="180" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="530" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis — Avail Cache</text>
+          <text x="530" y="225" text-anchor="middle" font-size="10.5" fill="#dc2626">hot available counts, TTL 60 s</text>
+
+          <!-- Primary sharded DB -->
+          <rect x="165" y="282" width="190" height="62" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="260" y="304" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Primary DB (sharded)</text>
+          <text x="260" y="320" text-anchor="middle" font-size="10.5" fill="#7c3aed">inventory_level source-of-truth</text>
+          <text x="260" y="335" text-anchor="middle" font-size="10" fill="#7c3aed">sharded by shop_id</text>
+
+          <!-- CDC / Kafka -->
+          <rect x="440" y="284" width="180" height="60" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="530" y="306" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">CDC → Kafka</text>
+          <text x="530" y="323" text-anchor="middle" font-size="10.5" fill="#ea580c">binlog change events</text>
+          <text x="530" y="338" text-anchor="middle" font-size="10" fill="#ea580c">partitioned by shop_id</text>
+
+          <!-- Search Index (right) -->
+          <rect x="640" y="284" width="155" height="60" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="717" y="306" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6d28d9">Search Index</text>
+          <text x="717" y="323" text-anchor="middle" font-size="10.5" fill="#7c3aed">Elasticsearch / Typesense</text>
+          <text x="717" y="338" text-anchor="middle" font-size="10" fill="#7c3aed">in-stock filter for PDP</text>
+
+          <!-- Ledger DB -->
+          <rect x="165" y="384" width="190" height="52" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="260" y="406" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Inventory Ledger</text>
+          <text x="260" y="423" text-anchor="middle" font-size="10.5" fill="#7c3aed">append-only audit log</text>
+
+          <!-- Fan-out workers -->
+          <rect x="440" y="384" width="180" height="66" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="530" y="406" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Fan-out Workers</text>
+          <text x="530" y="422" text-anchor="middle" font-size="10.5" fill="#008060">cache invalidation · channel sync</text>
+          <text x="530" y="438" text-anchor="middle" font-size="10" fill="#008060">Amazon/eBay webhooks · analytics</text>
+          <!-- also: expiry worker label -->
+          <text x="530" y="455" text-anchor="middle" font-size="10" fill="#ea580c">+ reservation expiry worker</text>
+
+          <!-- inline labels -->
+          <text x="400" y="204" font-size="10" fill="#94a3b8">read → cache first</text>
+          <text x="380" y="308" font-size="10" fill="#ea580c" text-anchor="middle">CDC</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge / gateway</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> async / CDC / queue</span>
+        </div>
+        <div class="cap"><span class="en">Request flow (grey spine) · write data flow (green) · CDC event flow (orange dashed) drawn separately. Expiry worker feedback loop shown at bottom.</span><span class="zh">请求流（灰色主干）· 写入数据流（绿色）· CDC 事件流（橙色虚线）分开绘制。底部展示预留到期回调反馈循环。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件详解</span></h4>
+      <ul>
+        <li><span class="en"><strong>API Gateway</strong> — authenticates shop credentials, enforces per-shop rate limits, routes reads vs. writes to separate service instances.</span><span class="zh"><strong>API Gateway</strong>——验证商店凭证，执行按商店限流，将读请求与写请求路由到独立的服务实例。</span></li>
+        <li><span class="en"><strong>Inventory Service</strong> — stateless; handles all six API endpoints. Read path: Redis first, DB fallback (and back-fill Redis). Write path: conditional SQL UPDATE then append to ledger.</span><span class="zh"><strong>Inventory Service（库存服务）</strong>——无状态；处理全部六个 API 接口。读路径：先查 Redis，未命中则回退到数据库（并回填 Redis）。写路径：条件 SQL UPDATE，然后追加到流水账。</span></li>
+        <li><span class="en"><strong>Redis — Avail Cache</strong> — stores the hot <code>available</code> count per variant-location. Short TTL (60 s) + CDC invalidation on every write keeps it fresh. Serves the large majority of PDP reads without touching SQL.</span><span class="zh"><strong>Redis — Avail Cache（可用量缓存）</strong>——存储每个变体-位置的热点 <code>available</code> 计数。短 TTL（60 秒）+ 每次写入时 CDC 失效保持新鲜。绝大多数 PDP 读取无需触及 SQL。</span></li>
+        <li><span class="en"><strong>Primary DB (sharded by shop_id)</strong> — MySQL/Postgres; <code>inventory_level</code> is the durable source of truth. Sharding by shop_id gives natural tenant isolation and lets us rate-limit a hot merchant's shard without affecting others.</span><span class="zh"><strong>Primary DB（按 shop_id 分片）</strong>——MySQL/Postgres；<code>inventory_level</code> 是持久化的真相来源。按 shop_id 分片提供天然的租户隔离，并允许对热点商家的分片单独限流而不影响其他商家。</span></li>
+        <li><span class="en"><strong>CDC → Kafka</strong> — change-data-capture off the binlog publishes every row mutation as an event, partitioned by <code>shop_id</code>. This decouples the write path from all downstream consumers.</span><span class="zh"><strong>CDC → Kafka</strong>——从 binlog 捕获变更，将每条行变更发布为事件，按 <code>shop_id</code> 分区。这将写路径与所有下游消费者解耦。</span></li>
+        <li><span class="en"><strong>Inventory Ledger</strong> — append-only table (or separate DB). Every adjustment is a row; the current level is a materialized view derivable by summing deltas. Enables reconciliation, replay, and audit.</span><span class="zh"><strong>Inventory Ledger（库存流水账）</strong>——只追加的表（或独立数据库）。每次调整均为一行记录；当前库存量是对所有增量求和的物化视图。支持对账、重放和审计。</span></li>
+        <li><span class="en"><strong>Fan-out Workers</strong> — Kafka consumers: cache invalidation worker (updates Redis), channel-sync workers (push webhooks to Amazon/eBay), analytics sink, and the <strong>reservation expiry worker</strong> (TTL-based release).</span><span class="zh"><strong>Fan-out Workers（扇出工作进程）</strong>——Kafka 消费者：缓存失效 worker（更新 Redis）、渠道同步 worker（向 Amazon/eBay 推送 webhook）、分析数据落地，以及<strong>预留到期 worker</strong>（基于 TTL 的释放）。</span></li>
+        <li><span class="en"><strong>Search Index</strong> — Elasticsearch/Typesense updated from Kafka; lets storefront search filter "in-stock only" without touching the inventory DB.</span><span class="zh"><strong>Search Index（搜索索引）</strong>——由 Kafka 驱动更新 Elasticsearch/Typesense；使店面搜索可以过滤"仅有货"而无需触碰库存数据库。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深入探讨</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 信号的所在</span></span></div>
+
+      <h3><span class="en">① The three-counter model: on_hand / committed / reserved / available</span><span class="zh">① 三计数器模型：on_hand / committed / reserved / available</span></h3>
+      <p><span class="en">A naive inventory system has one number: "stock". Shopify's real model has three explicit counters because each represents a <em>different promise</em>:</span><span class="zh">朴素的库存系统只有一个数字："库存"。Shopify 的真实模型有三个显式计数器，因为每个代表<em>不同的承诺</em>：</span></p>
+      <ul>
+        <li><span class="en"><strong>on_hand</strong> — physical units present at the location (what the warehouse scanner says).</span><span class="zh"><strong>on_hand</strong>——该位置实际存在的实物单位（仓库扫描器显示的数量）。</span></li>
+        <li><span class="en"><strong>committed</strong> — units claimed by placed orders not yet shipped. The merchant has promised these; they cannot be sold again.</span><span class="zh"><strong>committed</strong>——已下单但尚未发货的订单占用的单位。商家已承诺这些；不能再次销售。</span></li>
+        <li><span class="en"><strong>reserved</strong> — units held by active checkout sessions (cart holds, in-flight payments). Temporary; released if checkout is abandoned or times out.</span><span class="zh"><strong>reserved</strong>——活跃结账会话持有的单位（购物车预留、支付中）。临时性的；如果结账被放弃或超时则释放。</span></li>
+        <li><span class="en"><strong>available = on_hand − committed − reserved</strong> — what can be sold right now. This is a <em>derived</em> value, never stored directly (avoids drift).</span><span class="zh"><strong>available = on_hand − committed − reserved</strong>——当前可销售的数量。这是一个<em>派生</em>值，永远不直接存储（避免数据漂移）。</span></li>
+      </ul>
+      <p><span class="en">Why not one counter? Because conflating committed and reserved makes it impossible to answer "how many units are actually sellable right now" vs. "how many are leaving the building soon". A merchant restocking a committed unit (return) is different from a customer abandoning a cart (release a reservation). The model encodes these transitions explicitly.</span><span class="zh">为什么不用一个计数器？因为混淆 committed 和 reserved 后，就无法回答"现在实际可卖多少件"与"有多少件即将离库"。商家补充 committed 单位（退货）与客户放弃购物车（释放预留）是两种不同的状态转换。该模型明确编码了这些转换。</span></p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Three counters vs. one available counter</span><span class="zh">三计数器 vs. 单一 available 计数器</span></span>
+        <span class="en">A single "available" counter is simpler to implement but loses the audit trail. If a customer disputes "you said you had stock," you cannot reconstruct whether the unit was committed, reserved, or genuinely available at the moment of dispute. The three-counter model pays a small complexity tax for full traceability — worth it at Shopify's trust-and-safety requirements.</span>
+        <span class="zh">单一"available"计数器实现更简单，但会丢失审计追踪。如果客户投诉"你说有货"，你无法重建争议时刻该单位是处于 committed、reserved 还是真正 available 状态。三计数器模型用少量复杂度换取完整可追溯性——在 Shopify 的信任与安全要求下完全值得。</span>
+      </div>
+
+      <h3><span class="en">② Preventing oversell — optimistic concurrency on the write path</span><span class="zh">② 防止超卖——写路径上的乐观并发</span></h3>
+      <p><span class="en">The core operation is: "decrement available by 1 for this variant at this location, but only if available &gt;= 1." Three approaches:</span><span class="zh">核心操作是："将该变体在该位置的 available 减 1，但仅当 available &gt;= 1 时才执行。"三种方案：</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Approach</span><span class="zh">方案</span></th><th><span class="en">Mechanism</span><span class="zh">机制</span></th><th><span class="en">Latency</span><span class="zh">延迟</span></th><th><span class="en">Throughput on hot SKU</span><span class="zh">热点 SKU 吞吐</span></th><th><span class="en">Verdict</span><span class="zh">结论</span></th></tr></thead>
+        <tbody>
+          <tr><td><span class="en">Pessimistic lock</span><span class="zh">悲观锁</span></td><td><code>SELECT … FOR UPDATE</code> <span class="en">then decrement</span><span class="zh">后扣减</span></td><td><span class="en">High (lock wait)</span><span class="zh">高（等锁）</span></td><td><span class="en">Serialized — one at a time</span><span class="zh">串行——一次一个</span></td><td><span class="en">Safe but crushes hot-SKU throughput</span><span class="zh">安全但热点 SKU 吞吐极低</span></td></tr>
+          <tr><td><span class="en">Optimistic concurrency</span><span class="zh">乐观并发</span></td><td><span class="en">Conditional <code>UPDATE … WHERE available &gt;= 1 AND version = ?</code></span><span class="zh">条件更新 <code>UPDATE … WHERE available &gt;= 1 AND version = ?</code></span></td><td><span class="en">Low</span><span class="zh">低</span></td><td><span class="en">Good; retries on conflict</span><span class="zh">好；冲突时重试</span></td><td><span class="en"><strong>Default choice</strong> — correct and fast</span><span class="zh"><strong>默认选择</strong>——正确且快速</span></td></tr>
+          <tr><td><span class="en">Redis atomic counter</span><span class="zh">Redis 原子计数器</span></td><td><code>DECRBY</code> + Lua gate; <span class="en">DB write async</span><span class="zh">DB 异步写入</span></td><td><span class="en">Very low (µs)</span><span class="zh">极低（µs 级）</span></td><td><span class="en">Excellent (1M+ ops/s)</span><span class="zh">极佳（100 万+ ops/s）</span></td><td><span class="en">Use for extreme hot SKUs (flash-sale variant); adds durability gap (see Q01)</span><span class="zh">用于极端热点 SKU（抢购变体）；引入持久性缺口（见 Q01）</span></td></tr>
+        </tbody>
+      </table>
+      <p><span class="en">The recommended path is <strong>optimistic concurrency</strong>: attempt a conditional SQL update; if 0 rows affected, the stock is gone — return a graceful "just sold out" to the caller. No locks held, no serialization bottleneck for normal SKUs.</span><span class="zh">推荐路径是<strong>乐观并发</strong>：尝试条件 SQL 更新；如果影响 0 行，库存已售罄——向调用方返回优雅的"刚刚售罄"。无需持有锁，普通 SKU 无串行化瓶颈。</span></p>
+      <pre><code><span class="c">-- Conditional decrement (the oversell guard)</span>
+<span class="k">UPDATE</span> inventory_level
+<span class="k">SET</span>
+  reserved  = reserved  + <span class="n">:qty</span>,
+  version   = version   + <span class="n">1</span>,
+  updated_at = <span class="n">NOW()</span>
+<span class="k">WHERE</span>
+  variant_id  = <span class="n">:variant_id</span>
+  <span class="k">AND</span> location_id = <span class="n">:location_id</span>
+  <span class="k">AND</span> (on_hand - committed - reserved) >= <span class="n">:qty</span>
+  <span class="k">AND</span> version = <span class="n">:expected_version</span>;   <span class="c">-- optional; omit for simpler path</span>
+
+<span class="c">-- 0 rows affected → sold out or version conflict → retry / reject</span>
+<span class="c">-- 1 row affected → reservation created; write to reservation table</span></code></pre>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">The version-conflict retry loop — bound it</span><span class="zh">版本冲突重试循环——必须限制次数</span></span>
+        <span class="en">Under sustained hot-key contention (BFCM, flash sale) optimistic retries can spin. Bound retries to 2–3 with exponential jitter and fall back to a "sold out" response. For <em>extreme</em> hot SKUs, escalate to the Redis-counter approach from Q01: Redis is the gate, DB is the durable backstop.</span>
+        <span class="zh">在持续热点键争用（黑五、抢购）下，乐观重试可能空转。将重试次数限制在 2–3 次，加指数退避抖动，最终回退为"售罄"响应。对于<em>极端</em>热点 SKU，升级到 Q01 的 Redis 计数器方案：Redis 作为闸门，数据库作为持久化后盾。</span>
+      </div>
+
+      <h3><span class="en">③ Reservation with TTL — preventing abandoned-cart lockup</span><span class="zh">③ 带 TTL 的预留——防止弃单导致库存锁死</span></h3>
+      <p><span class="en">When a buyer starts checkout, a reservation holds <code>qty</code> units for N minutes (typically 10–15). The reservation expiry worker polls <code>SELECT … WHERE status='active' AND expires_at &lt; NOW()</code> every 30 seconds, releases expired rows, and fires the reverse adjustment: decrement <code>reserved</code>, restoring availability for other buyers.</span><span class="zh">当买家开始结账时，预留会为 N 分钟（通常 10–15 分钟）锁定 <code>qty</code> 个单位。预留到期 worker 每 30 秒轮询 <code>SELECT … WHERE status='active' AND expires_at &lt; NOW()</code>，释放过期行，并触发反向调整：减少 <code>reserved</code>，为其他买家恢复可用量。</span></p>
+      <p><span class="en">This pattern mirrors the flash-sale compensation loop (Q01). Key correctness property: <strong>a release is idempotent</strong> — the expiry worker may run multiple times due to at-least-once delivery; the <code>WHERE status='active'</code> guard ensures double-releases are no-ops. The ledger records every release with <code>reason='release_expired'</code> for auditability.</span><span class="zh">此模式与抢购补偿循环（Q01）相同。关键正确性属性：<strong>释放操作是幂等的</strong>——由于至少一次投递，到期 worker 可能多次运行；<code>WHERE status='active'</code> 条件保证重复释放是无操作。流水账记录每次释放，<code>reason='release_expired'</code>，用于审计。</span></p>
+      <p><span class="en">Trade-off: reserve-at-cart vs. reserve-at-checkout. Reserving at cart-add reduces "item disappeared at checkout" surprises for the buyer but increases held inventory and requires shorter TTLs (5 min vs. 15 min). Reserve-at-checkout-start is simpler and reduces phantom holds from window-shoppers.</span><span class="zh">权衡：加购时预留 vs. 结账时预留。加购时预留可减少买家"结账时商品消失"的意外，但会增加被锁定的库存，且需要更短的 TTL（5 分钟 vs. 15 分钟）。结账开始时预留更简单，并减少浏览者产生的幽灵预留。</span></p>
+
+      <h3><span class="en">④ Event-sourced ledger — audit truth and reconciliation</span><span class="zh">④ 事件溯源流水账——审计真相与对账</span></h3>
+      <p><span class="en">The <code>inventory_ledger</code> is the authoritative history: every stock movement is a signed delta row. The <code>inventory_level</code> table is a <em>materialized view</em> of the ledger's running sum. This separation is powerful:</span><span class="zh"><code>inventory_ledger</code> 是权威历史：每次库存变动都是一行带符号的增量记录。<code>inventory_level</code> 表是流水账累计求和的<em>物化视图</em>。这种分离非常强大：</span></p>
+      <ul>
+        <li><span class="en"><strong>Audit:</strong> "Why does this SKU show 3 units when I expected 5?" — query the ledger for the variant, find two unexplained sale deltas, trace to order IDs.</span><span class="zh"><strong>审计：</strong>"为什么这个 SKU 显示 3 件，我预期是 5 件？"——查询该变体的流水账，找到两条不明销售增量，追溯到订单 ID。</span></li>
+        <li><span class="en"><strong>Reconciliation:</strong> Recompute <code>SUM(delta)</code> from the ledger and compare to <code>on_hand</code> in the level table. Any mismatch is a bug — alert and investigate.</span><span class="zh"><strong>对账：</strong>从流水账重新计算 <code>SUM(delta)</code> 并与 level 表中的 <code>on_hand</code> 比较。任何不一致都是 bug——报警并调查。</span></li>
+        <li><span class="en"><strong>Replay:</strong> If a bug corrupts the level table, replay the ledger to rebuild it from scratch.</span><span class="zh"><strong>重放：</strong>如果 bug 损坏了 level 表，重放流水账从头重建。</span></li>
+      </ul>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">The three-way reconciliation you must name</span><span class="zh">必须点名的三方对账</span></span>
+        <span class="en">At any given time three stores can disagree: (1) Redis cache, (2) <code>inventory_level.on_hand</code>, (3) <code>SUM(ledger.delta)</code>. Cache is allowed to lag by TTL. The level and ledger must agree; if they drift it is a data bug. Run a scheduled reconciliation job that computes the sum from ledger and diffs against level — alert on any non-zero variance. Naming this proactively is a staff-level signal.</span>
+        <span class="zh">任何时刻三个存储可能不一致：(1) Redis 缓存，(2) <code>inventory_level.on_hand</code>，(3) <code>SUM(ledger.delta)</code>。缓存允许在 TTL 内滞后。Level 表与流水账必须一致；如果漂移，就是数据 bug。运行定时对账作业，从流水账计算求和并与 level 表做差异对比——任何非零偏差立即报警。主动点出这一点是 Staff 级信号。</span>
+      </div>
+
+      <h3><span class="en">⑤ Multi-channel and multi-location sync</span><span class="zh">⑤ 多渠道与多仓库同步</span></h3>
+      <p><span class="en">External channels (Amazon Seller Central, eBay) receive <strong>eventual consistency</strong> — the Kafka fan-out worker sends a webhook within seconds of a DB write. Shopify's own checkout path receives <strong>strong consistency</strong> — the conditional UPDATE is the arbiter. This two-tier model is intentional:</span><span class="zh">外部渠道（Amazon Seller Central、eBay）接收<strong>最终一致性</strong>——Kafka 扇出 worker 在 DB 写入后数秒内发送 webhook。Shopify 自有结账路径接收<strong>强一致性</strong>——条件 UPDATE 是仲裁者。这种两级模型是有意为之的：</span></p>
+      <ul>
+        <li><span class="en"><strong>Own-store checkout:</strong> reads from DB (or Redis with TTL &lt; 5 s); decrement is atomic and conditional. Never oversell.</span><span class="zh"><strong>自有店面结账：</strong>从 DB 读取（或 TTL &lt; 5 秒的 Redis）；扣减是原子且条件性的。绝不超卖。</span></li>
+        <li><span class="en"><strong>External marketplace:</strong> receives an inventory update webhook after each sale. Latency of seconds is acceptable; Amazon has its own buffer. If two channels sell the last unit simultaneously, the conditional decrement is the arbiter: one succeeds, the other gets 0 rows affected → fires a "just sold out" correction webhook to the losing channel.</span><span class="zh"><strong>外部平台：</strong>每次销售后收到库存更新 webhook。秒级延迟可接受；Amazon 有自己的缓冲区。如果两个渠道同时卖出最后一件，条件扣减是仲裁者：一个成功，另一个影响 0 行 → 向失败渠道发送"刚刚售罄"的纠正 webhook。</span></li>
+        <li><span class="en"><strong>Multi-location fulfillment:</strong> when an order comes in, an allocation algorithm (nearest warehouse, priority rules, available qty) picks the fulfillment location. The reservation targets a specific <code>location_id</code>; transfers-in-transit are tracked as separate ledger entries.</span><span class="zh"><strong>多仓库履约：</strong>订单到来时，分配算法（最近仓库、优先级规则、可用数量）选择履约位置。预留针对特定 <code>location_id</code>；在途调拨作为独立流水账条目追踪。</span></li>
+      </ul>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Race: two channels sell the last unit simultaneously</span><span class="zh">竞态：两个渠道同时卖出最后一件</span></span>
+        <span class="en">Channel A (own storefront) and Channel B (Amazon) both see available=1 in their respective caches and both attempt to decrement. Channel A fires a SQL conditional UPDATE first — 1 row affected, success. Channel B's conditional UPDATE fires 50 ms later — 0 rows (available is now 0) → Inventory Service sends a correction webhook to Amazon reducing their available to 0. No oversell; Amazon gets a graceful "just sold out" signal. The SQL conditional UPDATE is the single point of truth.</span>
+        <span class="zh">渠道 A（自有店面）和渠道 B（Amazon）都在各自缓存中看到 available=1，并都尝试扣减。渠道 A 先触发条件 SQL UPDATE——影响 1 行，成功。渠道 B 的条件 UPDATE 在 50 ms 后触发——影响 0 行（available 现在是 0）→ Inventory Service 向 Amazon 发送纠正 webhook，将其 available 降为 0。无超卖；Amazon 收到优雅的"刚刚售罄"信号。SQL 条件 UPDATE 是唯一真相来源。</span>
+      </div>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">权衡取舍</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">选项 A</span></th><th><span class="en">Option B</span><span class="zh">选项 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Consistency model per channel</span><span class="zh">各渠道一致性模型</span></td>
+            <td><span class="en">Strong consistency everywhere (DB read + lock)</span><span class="zh">全部强一致性（DB 读取 + 锁）</span></td>
+            <td><span class="en">Strong for own checkout; eventual for marketplaces</span><span class="zh">自有结账强一致；第三方平台最终一致</span></td>
+            <td><span class="en"><strong>Hybrid</strong>: strong on the conditional decrement for Shopify checkout; accept seconds of lag on external channel webhooks — reduces coupling and load on DB</span><span class="zh"><strong>混合</strong>：Shopify 结账的条件扣减用强一致；外部渠道 webhook 接受秒级滞后——降低耦合和 DB 负载</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Concurrency on hot SKU</span><span class="zh">热点 SKU 并发</span></td>
+            <td><span class="en">Pessimistic <code>SELECT FOR UPDATE</code> — safe, serialized</span><span class="zh">悲观 <code>SELECT FOR UPDATE</code>——安全，串行</span></td>
+            <td><span class="en">Optimistic conditional UPDATE — fast, retry on conflict</span><span class="zh">乐观条件 UPDATE——快速，冲突时重试</span></td>
+            <td><span class="en"><strong>Optimistic</strong> for normal SKUs; escalate to Redis atomic counter only for extreme hot SKUs (flash-sale burst)</span><span class="zh">普通 SKU 用<strong>乐观</strong>；仅对极端热点 SKU（抢购爆发）升级到 Redis 原子计数器</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Cache freshness vs. DB load</span><span class="zh">缓存新鲜度 vs. DB 负载</span></td>
+            <td><span class="en">Short TTL (5 s) — always fresh, higher read-through on misses</span><span class="zh">短 TTL（5 秒）——始终新鲜，未命中时穿透率更高</span></td>
+            <td><span class="en">Long TTL + CDC invalidation on every write</span><span class="zh">长 TTL + 每次写入时 CDC 失效</span></td>
+            <td><span class="en"><strong>CDC invalidation + fallback TTL</strong>: invalidate on write for real-time accuracy, TTL as safety net — best of both</span><span class="zh"><strong>CDC 失效 + 兜底 TTL</strong>：写入时失效保证实时准确，TTL 作为安全网——两全其美</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Reserve at cart-add vs. checkout-start</span><span class="zh">加购时预留 vs. 结账时预留</span></td>
+            <td><span class="en">Cart-add reservation — fewer "item disappeared" surprises for buyer</span><span class="zh">加购时预留——减少买家"结账时商品消失"的意外</span></td>
+            <td><span class="en">Checkout-start reservation — less phantom inventory hold</span><span class="zh">结账时预留——减少幽灵库存锁定</span></td>
+            <td><span class="en"><strong>Checkout-start</strong> for simplicity; offer cart-add with a very short TTL (5 min) as an opt-in for high-demand launches</span><span class="zh"><strong>结账时预留</strong>更简单；对高需求商品发布，提供加购时预留作为可选项（TTL 5 分钟）</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Single available counter vs. three-counter model</span><span class="zh">单一 available 计数器 vs. 三计数器模型</span></td>
+            <td><span class="en">Single "available" column — simpler</span><span class="zh">单一"available"列——更简单</span></td>
+            <td><span class="en">on_hand / committed / reserved / available derived — complex but auditable</span><span class="zh">on_hand / committed / reserved / available 派生——复杂但可审计</span></td>
+            <td><span class="en"><strong>Three counters</strong>: the audit and reconciliation value justifies the complexity; single counter loses traceability at Shopify's trust-and-safety bar</span><span class="zh"><strong>三计数器</strong>：审计和对账价值证明复杂度值得；单计数器在 Shopify 信任与安全标准下会丢失可追溯性</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Channel sync: push vs. pull</span><span class="zh">渠道同步：推 vs. 拉</span></td>
+            <td><span class="en">Push webhooks from Kafka fan-out — near-real-time but adds fan-out infra</span><span class="zh">Kafka 扇出推送 webhook——近实时但增加扇出基础设施</span></td>
+            <td><span class="en">Channels poll our API — simpler, but adds QPS and increases lag</span><span class="zh">渠道轮询我们的 API——更简单，但增加 QPS 并加大延迟</span></td>
+            <td><span class="en"><strong>Push</strong> for owned integrations (POS, Shopify Markets); allow pull for third-party channels with explicit rate limits</span><span class="zh">自有集成（POS、Shopify Markets）用<strong>推送</strong>；第三方渠道允许拉取，附带明确的速率限制</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追加问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">How do you handle backorders and pre-orders — can available go negative?</span><span class="zh">如何处理缺货预订和预购——available 可以变为负数吗？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Yes, with an explicit product configuration. When a variant is marked <code>backorder_enabled</code> or <code>preorder</code>, the conditional UPDATE drops the <code>available &gt;= qty</code> guard and allows <code>on_hand - committed - reserved</code> to go negative, representing a backorder commitment. The UI shows "ships in X weeks" instead of "in stock." The ledger records these with <code>reason='backorder_sale'</code>. Critically, this is a <em>per-variant setting</em>, not a system-wide one — most merchants never enable it.</span><span class="zh">可以，但需要显式的商品配置。当变体被标记为 <code>backorder_enabled</code> 或 <code>preorder</code> 时，条件 UPDATE 去掉 <code>available &gt;= qty</code> 的守卫，允许 <code>on_hand - committed - reserved</code> 变为负数，代表缺货预订承诺。UI 显示"X 周内发货"而非"有货"。流水账以 <code>reason='backorder_sale'</code> 记录这些操作。关键是，这是<em>每个变体</em>的配置，而非全系统设置——大多数商家从不启用它。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A customer returns an item — how does inventory reflect that?</span><span class="zh">客户退货——库存如何反映？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">A return triggers a ledger entry with <code>reason='return'</code> and <code>delta=+qty</code>. But whether that immediately increments <code>on_hand</code> depends on merchant configuration: some merchants want to inspect returned goods before restocking. The pattern is a <code>status='quarantine'</code> flag on the return; when the merchant marks it "restockable," a second ledger row with <code>reason='restock_approved'</code> increments <code>on_hand</code>. This means committed can only decrease when an order ships (or is cancelled), not on return initiation — protecting against a merchant thinking stock is back before it physically arrives.</span><span class="zh">退货触发一条 <code>reason='return'</code>、<code>delta=+qty</code> 的流水账条目。但是否立即增加 <code>on_hand</code> 取决于商家配置：有些商家希望在上架前检验退回商品。模式是在退货上设置 <code>status='quarantine'</code> 标志；当商家标记为"可上架"时，第二条 <code>reason='restock_approved'</code> 的流水账行才增加 <code>on_hand</code>。这意味着 committed 只在订单发货（或取消）时减少，而不是在退货发起时——防止商家在货物实际到达前误以为库存已恢复。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Two channels sell the last unit at the exact same instant — what happens?</span><span class="zh">两个渠道在同一时刻卖出最后一件——会发生什么？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Both channels read <code>available=1</code> from cache and attempt a conditional UPDATE. SQL serializes concurrent updates to the same row: one transaction gets <code>1 row affected</code> (success); the other gets <code>0 rows affected</code> (available is now 0). The losing caller receives a "sold out" response and must either reject the order or route to backorder. For external marketplace channels, the Inventory Service fires a correction webhook ("available is now 0") — Amazon or eBay must respect that and update their listings. No oversell occurs. This is the single conditional UPDATE acting as the global arbiter.</span><span class="zh">两个渠道都从缓存读到 <code>available=1</code> 并尝试条件 UPDATE。SQL 将同一行的并发更新串行化：一个事务得到 <code>1 row affected</code>（成功）；另一个得到 <code>0 rows affected</code>（available 现在为 0）。失败方收到"售罄"响应，必须拒绝订单或转入缺货预订。对于外部平台渠道，Inventory Service 发送纠正 webhook（"available 现在为 0"）——Amazon 或 eBay 必须尊重并更新其商品列表。不会发生超卖。这就是单一条件 UPDATE 作为全局仲裁者。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you detect and fix drift between the Redis cache, the level table, and the ledger?</span><span class="zh">如何检测和修复 Redis 缓存、level 表与流水账之间的漂移？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three-way reconciliation job runs on a schedule (every few minutes for hot SKUs, hourly for cold ones): (1) compute <code>SUM(delta)</code> from <code>inventory_ledger</code> per variant-location → this is the ground truth; (2) compare to <code>inventory_level.on_hand</code> — if mismatch, alert and optionally self-heal with a <code>reason='reconciliation_correction'</code> ledger entry; (3) compare Redis cache value to <code>inventory_level.available</code> — if mismatch and within TTL window, acceptable; if stale beyond 2× TTL, force-invalidate. Persistent drift between the ledger sum and the level table is a critical bug — page on-call immediately, do not silently self-correct without alerting.</span><span class="zh">三方对账作业定时运行（热点 SKU 每几分钟一次，冷 SKU 每小时一次）：(1) 按变体-位置从 <code>inventory_ledger</code> 计算 <code>SUM(delta)</code> → 这是基准真相；(2) 与 <code>inventory_level.on_hand</code> 比较——若不匹配，报警并可选地以 <code>reason='reconciliation_correction'</code> 流水账条目自愈；(3) 将 Redis 缓存值与 <code>inventory_level.available</code> 比较——若不匹配且在 TTL 窗口内，可接受；若陈旧超过 2× TTL，强制失效。流水账求和与 level 表之间的持久漂移是严重 bug——立即呼叫值班人员，不要在不报警的情况下静默自纠正。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A huge merchant has millions of SKUs and one variant goes viral — how do you handle the hot SKU?</span><span class="zh">某大商家有数百万 SKU，某个变体突然爆红——如何处理热点 SKU？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">For large-merchant scale: the shard keyed to their <code>shop_id</code> can be further split (sub-sharding by <code>variant_id</code> hash). For a genuinely viral hot SKU (think BFCM-level), escalate to the Redis-counter gate pattern from Q01: pre-load the available count into a Redis <code>DECRBY</code> counter; the SQL DB becomes the durable backstop with async reconciliation. This trades the durability gap (Redis not-yet-flushed state) for µs-level atomic decrements that can sustain millions of concurrent attempts. The Q01 flash-sale design is exactly this pattern generalized.</span><span class="zh">对于大商家规模：以其 <code>shop_id</code> 为键的分片可以进一步拆分（按 <code>variant_id</code> 哈希子分片）。对于真正爆红的热点 SKU（黑五量级），升级到 Q01 的 Redis 计数器闸门模式：将 available 计数预加载到 Redis <code>DECRBY</code> 计数器；SQL DB 成为带异步对账的持久化后盾。这用持久性缺口（Redis 尚未落盘的状态）换取 µs 级原子扣减，可承受数百万并发尝试。Q01 的抢购设计正是这一模式的泛化。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do search and PDP show stock status without hammering the inventory DB?</span><span class="zh">搜索和 PDP 如何在不冲击库存 DB 的情况下展示库存状态？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Two-layer strategy: (1) <strong>Redis cache</strong> — the Inventory Service writes hot <code>available</code> counts to Redis on every successful adjustment; PDPs read Redis directly, not the SQL DB. Cache TTL is 60 s; CDC Kafka consumer invalidates the key immediately on any write, so cache staleness is bounded by the time between a write and the invalidation message processing (typically &lt;1 s). (2) <strong>Search index</strong> — Elasticsearch/Typesense is updated from the Kafka CDC stream; the search "in-stock" filter reads from the index, not from the inventory DB at all. This means search can show slightly stale in-stock status (seconds), which is acceptable for discovery — exact availability is confirmed at checkout time by the conditional SQL UPDATE.</span><span class="zh">两层策略：(1) <strong>Redis 缓存</strong>——Inventory Service 在每次成功调整后将热点 <code>available</code> 计数写入 Redis；PDP 直接读 Redis，不读 SQL DB。缓存 TTL 为 60 秒；CDC Kafka 消费者在任何写入时立即失效对应键，因此缓存陈旧度受限于写入与失效消息处理之间的时间（通常 &lt;1 秒）。(2) <strong>搜索索引</strong>——Elasticsearch/Typesense 由 Kafka CDC 流更新；搜索"有货"过滤器从索引读取，完全不触碰库存 DB。这意味着搜索可能显示略微陈旧的有货状态（秒级），对于商品发现是可接受的——确切可用性在结账时由条件 SQL UPDATE 确认。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How does a return / restock flow keep <code>available</code> correct?</span><span class="zh">退货/补货流程如何保持 <code>available</code> 正确？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The return is modelled as a ledger append: <code>reason='return', delta=+qty, ref=return_id</code>. Idempotency is enforced by a unique index on <code>ref</code> — replaying the same return event is a no-op. <code>on_hand</code> increments only after inspection passes (a second ledger row with <code>reason='restock_approved'</code>), so <code>available</code> stays conservative until the goods are physically confirmed. This two-phase pattern prevents phantom availability and keeps the ledger as the single source of truth for every unit's lifecycle.</span><span class="zh">退货被建模为一条流水账追加：<code>reason='return', delta=+qty, ref=return_id</code>。幂等性由 <code>ref</code> 上的唯一索引保证——重放同一退货事件是无操作。<code>on_hand</code> 仅在检验通过后才增加（第二条 <code>reason='restock_approved'</code> 的流水账行），因此在货物被实物确认前 <code>available</code> 保持保守值。这种两阶段模式防止了幽灵可用量，并让流水账成为每个单位全生命周期的唯一真相来源。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How does the model change for backorders / pre-orders (overselling intentionally allowed)?</span><span class="zh">缺货预订/预购（有意允许超卖）时模型如何改变？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Two approaches: (a) allow <code>available</code> to go negative — the conditional UPDATE simply removes the <code>&gt;= qty</code> guard when <code>backorder_enabled=true</code> for that variant, and the ledger records a <code>reason='backorder_sale'</code>; the UI surfaces "ships in X weeks." (b) maintain a separate <code>backorder_qty</code> counter alongside the normal counters, so the oversell commitment is always explicit and does not muddy the regular <code>available</code> semantics. Either way this is a <em>per-variant policy</em>, toggled by the merchant, never a system-wide default. Keeping it per-variant lets most of the codebase stay simple while allowing the edge case cleanly.</span><span class="zh">两种方式：(a) 允许 <code>available</code> 变为负数——当该变体 <code>backorder_enabled=true</code> 时，条件 UPDATE 简单地去掉 <code>&gt;= qty</code> 守卫，流水账记录 <code>reason='backorder_sale'</code>；UI 显示"X 周内发货"。(b) 在常规计数器旁维护独立的 <code>backorder_qty</code> 计数器，使超卖承诺始终显式，不污染常规 <code>available</code> 语义。无论哪种方式，这都是<em>每个变体</em>的策略，由商家切换，绝不是全系统默认值。按变体维护策略让绝大多数代码保持简单，同时干净地处理边缘情况。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you sync inventory to an external marketplace (e.g. Amazon) given their ingest lag?</span><span class="zh">考虑到外部平台（如 Amazon）的摄入延迟，如何同步库存？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The canonical pattern is async push via CDC events: every <code>inventory_level</code> write emits a Kafka event; a channel-sync worker consumes it and calls Amazon's inventory API (or queues for their batch ingest). Because Amazon can take minutes to reflect updates, a safety buffer is essential: publish <code>available − threshold</code> (e.g. subtract 5–10 units) to Amazon, keeping a cushion that absorbs the window of concurrent sales. If both channels sell simultaneously and Amazon's side oversells due to lag, the Shopify conditional UPDATE still wins — fire a correction webhook immediately to push Amazon to 0. The rule is: eventual consistency is fine for display; Shopify's DB is the arbiter for committed stock.</span><span class="zh">标准模式是通过 CDC 事件异步推送：每次 <code>inventory_level</code> 写入都触发 Kafka 事件；渠道同步 worker 消费它并调用 Amazon 的库存 API（或排入其批量摄入队列）。由于 Amazon 可能需要数分钟才能反映更新，安全缓冲区至关重要：向 Amazon 发布 <code>available − threshold</code>（例如减去 5–10 件），保留缓冲以吸收并发销售窗口。如果两个渠道同时销售，Amazon 因延迟超卖，Shopify 的条件 UPDATE 仍然获胜——立即发送纠正 webhook 将 Amazon 推为 0。规则是：最终一致性用于展示没问题；Shopify 的 DB 是已承诺库存的仲裁者。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A bug double-counted a shipment — how do you detect and correct it?</span><span class="zh">一个 bug 导致某次出货被重复计数——如何检测和纠正？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Detection: the reconciliation job computes <code>SUM(ledger.delta)</code> per variant-location and diffs against <code>inventory_level.on_hand</code>. A double-counted shipment appears as a negative variance (level shows fewer units than ledger sum). The ledger is the truth — the level table is the derived view that drifted. Correction: never edit or delete the erroneous ledger rows (that destroys the audit trail). Instead, post a new correcting adjustment row: <code>reason='reconciliation_correction', delta=+N, ref=bug-ticket-id</code>. This brings the level back in sync while preserving full history. Then find and fix the root-cause bug so it cannot recur, and add a test that exercises the idempotency key to prevent replay double-counts.</span><span class="zh">检测：对账作业按变体-位置计算 <code>SUM(ledger.delta)</code> 并与 <code>inventory_level.on_hand</code> 做差异。重复计数的出货表现为负偏差（level 显示的单位少于流水账求和）。流水账是真相——level 表是漂移的派生视图。纠正：永远不要编辑或删除错误的流水账行（那会破坏审计追踪）。而是发布一条新的纠正调整行：<code>reason='reconciliation_correction', delta=+N, ref=bug-ticket-id</code>。这在保留完整历史的同时让 level 重新同步。然后找出并修复根本原因 bug 防止复发，并添加测试来覆盖幂等键，防止重放导致的重复计数。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Bundles / kits: one sale must decrement several SKUs atomically — how?</span><span class="zh">捆绑包/套件：一次销售必须原子性地扣减多个 SKU——如何实现？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Wrap all component decrements in a single database transaction: for each component SKU, issue the conditional <code>UPDATE … WHERE available &gt;= qty</code>; if any UPDATE returns 0 rows affected, roll back the entire transaction and return "sold out" for the bundle. This gives all-or-nothing atomicity — no partial decrements leak. For cross-shard bundles (components on different <code>shop_id</code> shards), use a two-phase commit or, more practically, a saga with explicit compensation: decrement each component in sequence, and if any step fails, issue compensating increments for the already-decremented ones, all recorded in the ledger with <code>reason='bundle_rollback'</code>.</span><span class="zh">将所有组件扣减包裹在单个数据库事务中：对每个组件 SKU 发出条件 <code>UPDATE … WHERE available &gt;= qty</code>；如果任何 UPDATE 返回影响 0 行，回滚整个事务并返回捆绑包"售罄"。这提供全有或全无的原子性——不会有部分扣减泄漏。对于跨分片捆绑包（组件在不同 <code>shop_id</code> 分片上），使用两阶段提交，或更实用地，使用带显式补偿的 saga：按顺序扣减每个组件，如果任何步骤失败，对已扣减的组件发出补偿增量，全部以 <code>reason='bundle_rollback'</code> 记录在流水账中。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Multi-location: which location fulfills an online order, and how is that decided?</span><span class="zh">多仓库：线上订单由哪个仓库履约，如何决定？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">An allocation service runs a ranked policy at order placement time: (1) filter locations that have <code>available &gt;= qty</code>; (2) score by proximity to the shipping address, shipping cost, and merchant-configured priority; (3) pick the highest-scoring location and immediately create a reservation against that specific <code>location_id</code>. The allocation decision is recorded in the order so it is durable. If the chosen location's stock drops to zero before the reservation commits (race with another order), the reservation attempt returns 0 rows — the allocator re-runs and picks the next best location. This keeps the reservation path identical to the single-location case; allocation is just a pre-step that selects the target.</span><span class="zh">分配服务在下单时运行排名策略：(1) 过滤 <code>available &gt;= qty</code> 的仓库位置；(2) 按与收货地址的距离、运费和商家配置的优先级打分；(3) 选择得分最高的位置并立即针对该特定 <code>location_id</code> 创建预留。分配决策记录在订单中以保证持久性。如果所选位置的库存在预留提交前降为零（与其他订单竞争），预留尝试返回 0 行——分配器重新运行并选择次优位置。这使预留路径与单仓库情况完全一致；分配只是选择目标的预处理步骤。</span></p>
+          </div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct">⭐ <span class="en">Staff-level summary — say these things</span><span class="zh">Staff 级总结——面试时必说这些</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Correctness lives in the conditional SQL decrement</strong> — the DB is the arbiter; Redis is a fast display cache, not a source of truth for committed stock.</span><span class="zh"><strong>正确性在于条件 SQL 扣减</strong>——DB 是仲裁者；Redis 是快速展示缓存，不是已承诺库存的真相来源。</span></li>
+          <li><span class="en"><strong>Model the three counters explicitly</strong> — <code>on_hand / committed / reserved</code> with <code>available</code> derived; conflating them loses auditability and makes reconciliation impossible.</span><span class="zh"><strong>显式建模三个计数器</strong>——<code>on_hand / committed / reserved</code>，<code>available</code> 派生；混淆它们会丢失可审计性并使对账不可能。</span></li>
+          <li><span class="en"><strong>The ledger is the audit truth; the level table is a materialized view</strong> — never update a ledger row; if they drift, the ledger wins and you file a bug.</span><span class="zh"><strong>流水账是审计真相；level 表是物化视图</strong>——永远不要更新流水账行；如果漂移，流水账获胜，你提一个 bug。</span></li>
+          <li><span class="en"><strong>Cache + CDC for read scale</strong> — 500k QPS of PDP reads never touch SQL; Redis + CDC invalidation serves them in microseconds.</span><span class="zh"><strong>缓存 + CDC 扛读取规模</strong>——50 万 QPS 的 PDP 读取永远不触碰 SQL；Redis + CDC 失效在微秒内服务它们。</span></li>
+          <li><span class="en"><strong>Degrade to "sold out" gracefully, never oversell</strong> — when the conditional UPDATE returns 0 rows, the right answer is a clean "just sold out" response, not a retry loop that burns the system. The loser gets a graceful rejection, not a corrupted order.</span><span class="zh"><strong>优雅降级为"售罄"，绝不超卖</strong>——当条件 UPDATE 返回 0 行时，正确答案是干净的"刚刚售罄"响应，而不是烧毁系统的重试循环。失败方获得优雅拒绝，而不是损坏的订单。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview patterns including inventory</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify: inventory, checkout, and scale patterns</a></li>
+        <li><a href="https://www.techinterview.org/post/3233464757/lld-flash-sale-system/">techinterview.org — Flash Sale system: inventory lock, queue-based checkout, oversell prevention</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="01_flash_sale.html">← 01 · <span class="en">Flash Sale</span><span class="zh">抢购</span></a> &nbsp;·&nbsp; <a href="03_checkout_payments.html"><span class="en">Next:</span><span class="zh">下一题：</span> 03 · <span class="en">Checkout &amp; Payments</span><span class="zh">结账与支付</span> →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>08 · Rate Limiter — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 08 · Rate Limiter</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="07_webhook_delivery.html"><span class="n">←</span> 07 Webhooks</a>
+    <a href="09_notification_system.html"><span class="n">→</span> 09 Notifications</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 3 · Ecosystem · ★★★☆☆</div>
+      <h1><span class="en">Design a Rate Limiting System for the Shopify API</span><span class="zh">为 Shopify API 设计限流系统</span></h1>
+      <p><span class="en">Shopify exposes REST and GraphQL APIs to millions of apps and merchants. The rate limiter must
+      <strong>protect the platform from abuse and overload</strong> while being scrupulously fair across
+      tenants — one rogue app must never exhaust capacity that other merchants depend on.</span><span class="zh">Shopify 向数百万应用和商户开放 REST 和 GraphQL API。限流系统必须<strong>保护平台免受滥用和过载</strong>，同时在租户间保持严格公平——一个行为异常的应用不能耗尽其他商户所依赖的容量。</span></p>
+      <div class="meta">
+        <span class="chip"><span class="en">Seen: platform/infrastructure framing</span><span class="zh">考察方向：平台/基础设施架构</span></span>
+        <span class="chip"><span class="en">Tests: multi-tenancy + distributed correctness</span><span class="zh">考点：多租户 + 分布式正确性</span></span>
+        <span class="chip">60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question is interesting at Shopify specifically</span><span class="zh">为什么这道题在 Shopify 面试中特别有意思</span></span>
+      <span class="en">Shopify's real API model is non-trivial: REST uses a <strong>leaky/token bucket</strong> (burst + steady refill),
+      while GraphQL uses <strong>calculated query cost</strong> because a single GraphQL call can be arbitrarily expensive —
+      fetching thousands of orders in one request costs far more than fetching a single product.
+      Request-count alone is the wrong metric for GraphQL. Frame your answer around
+      <em>fairness + platform protection across a multi-tenant, multi-protocol API surface.</em></span><span class="zh">Shopify 真实的 API 模型并不简单：REST 使用<strong>漏桶/令牌桶</strong>（突发 + 稳定补充），而 GraphQL 使用<strong>计算查询成本</strong>——因为一次 GraphQL 调用的代价可以差异极大，一次请求拉取数千条订单比拉取单个产品耗费的服务器资源多得多。对于 GraphQL，单纯统计请求次数是错误的度量方式。你的回答应围绕<em>在多租户、多协议 API 层面的公平性与平台保护</em>来展开。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">约 7 分钟 · 主动提问，不要假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Limit requests per API client: <strong>per shop, per app, per access token</strong>.</span><span class="zh">按 API 客户端限流：<strong>按商店、按应用、按访问令牌</strong>分别计算。</span></li>
+            <li><span class="en">Support <strong>REST</strong> (request-count) and <strong>GraphQL</strong> (cost-based points).</span><span class="zh">同时支持 <strong>REST</strong>（请求次数计费）和 <strong>GraphQL</strong>（基于成本积分）。</span></li>
+            <li><span class="en">Return clear <strong>429 Too Many Requests</strong> with <code>Retry-After</code> and rate-limit headers.</span><span class="zh">返回清晰的 <strong>429 Too Many Requests</strong>，并附带 <code>Retry-After</code> 和限流响应头。</span></li>
+            <li><span class="en">Configurable limits per plan/tier (Basic, Advanced, Plus, Partner).</span><span class="zh">按套餐/等级（Basic、Advanced、Plus、Partner）可配置限额。</span></li>
+            <li><span class="en">GraphQL response includes query cost breakdown: points requested, available, restore rate.</span><span class="zh">GraphQL 响应中包含查询成本明细：请求积分、可用积分、恢复速率。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>Distributed enforcement</strong> across many gateway nodes — no per-node blindspot.</span><span class="zh"><strong>分布式强制执行</strong>——跨多个网关节点，不存在单节点盲区。</span></li>
+            <li><span class="en"><strong>Low added latency</strong> — limiter check must be a single-digit-ms fast path.</span><span class="zh"><strong>低附加延迟</strong>——限流检查必须是个位数毫秒的快速路径。</span></li>
+            <li><span class="en">High <strong>accuracy</strong> — avoid badly over- or under-counting; short-term approximation acceptable.</span><span class="zh">高<strong>准确性</strong>——避免严重的多计或漏计；短期近似可接受。</span></li>
+            <li><span class="en"><strong>Resilient</strong> — graceful behavior when the limiter store is degraded.</span><span class="zh"><strong>高可用</strong>——限流存储降级时能优雅降级。</span></li>
+            <li><span class="en"><strong>Multi-tenant fairness</strong> — one shop/app must not starve others on the platform.</span><span class="zh"><strong>多租户公平性</strong>——一个商店/应用不得抢占其他商户在平台上所需的资源。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to ask out loud</span><span class="zh">面试时应主动提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">What is the primary limit dimension — <strong>per shop, per app, or per access token?</strong> <em>(All three; they compose.)</em></span><span class="zh">主要限流维度是什么——<strong>按商店、按应用，还是按访问令牌？</strong><em>（三者都有，且相互叠加。）</em></span></li>
+          <li><span class="en">REST, GraphQL, or both? Different algorithms apply.</span><span class="zh">限制 REST、GraphQL，还是两者都包含？不同协议适用不同算法。</span></li>
+          <li><span class="en"><strong>Hard vs soft limits</strong> — strict 429 or graceful degradation with warnings first?</span><span class="zh"><strong>硬限制还是软限制</strong>——严格返回 429，还是先发出警告再优雅降级？</span></li>
+          <li><span class="en">Global limits or <strong>per-region limits?</strong> Affects consistency model.</span><span class="zh">全局限制还是<strong>按地区限制？</strong>这将影响一致性模型的选择。</span></li>
+          <li><span class="en">If the Redis store is unavailable — <strong>fail open</strong> (allow requests, risk overload) or <strong>fail closed</strong> (block all, risk SLA breach)?</span><span class="zh">如果 Redis 存储不可用——<strong>失败开放</strong>（放行请求，有过载风险）还是<strong>失败关闭</strong>（拦截所有请求，有 SLA 违约风险）？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the binding constraint</span><span class="zh">找到瓶颈约束</span></span></div>
+      <p><span class="en">The key insight: the rate limiter is in the <strong>hot path of every API call</strong>. It must add minimal latency,
+      which means the check must be a single cheap operation — one Redis round trip — not a read-modify-write fan-out.</span><span class="zh">核心洞察：限流器处于<strong>每次 API 调用的热路径</strong>上。它必须只增加极小的延迟，这意味着检查操作必须是单次廉价操作——一次 Redis 往返请求——而不是读-改-写的扇出操作。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">500k+</div><div class="l"><span class="en">peak API QPS (platform-wide)</span><span class="zh">峰值 API QPS（全平台）</span></div></div>
+        <div class="kpi"><div class="v">~10M</div><div class="l"><span class="en">distinct client buckets (shop × app)</span><span class="zh">独立客户端桶数量（商店 × 应用）</span></div></div>
+        <div class="kpi"><div class="v">~100</div><div class="l"><span class="en">stateless gateway nodes</span><span class="zh">无状态网关节点数</span></div></div>
+        <div class="kpi"><div class="v">&lt;5 ms</div><div class="l"><span class="en">target added latency per request</span><span class="zh">每请求目标附加延迟</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en"><strong>Redis ops per request</strong>: must be ~1 (an atomic Lua script = one round trip). At 500k QPS that is
+        500k Redis ops/s — achievable on a small sharded cluster since each op is a tiny key read-modify-write.</span><span class="zh"><strong>每请求 Redis 操作数</strong>：必须约为 1 次（一个原子 Lua 脚本 = 一次往返）。在 500k QPS 下，这意味着 50 万次 Redis 操作/秒——在小型分片集群上完全可行，因为每次操作只是一次微小的键读-改-写。</span></li>
+        <li><span class="en"><strong>Key space</strong>: 10M buckets × ~32 bytes each ≈ 320 MB. Fits comfortably in memory; no persistence needed beyond
+        the TTL of the bucket window.</span><span class="zh"><strong>键空间</strong>：1000 万个桶 × 约 32 字节/桶 ≈ 320 MB。完全能放入内存；除桶窗口的 TTL 之外，无需持久化。</span></li>
+        <li><span class="en"><strong>Hot-key risk</strong>: some shops generate far more traffic than others. Shard Redis by <code>clientId</code> hash so
+        no single shard becomes a bottleneck. A single flash-sale merchant should not saturate the limiter for everyone else.</span><span class="zh"><strong>热键风险</strong>：某些商店产生的流量远多于其他商店。按 <code>clientId</code> 哈希对 Redis 分片，确保单个分片不成为瓶颈。一个正在举办闪购活动的商户不应耗尽整个平台的限流容量。</span></li>
+        <li><span class="en"><strong>Gateway nodes</strong>: stateless; the limiter middleware makes one async call to Redis per request. No per-node state.</span><span class="zh"><strong>网关节点</strong>：无状态；限流中间件每次请求向 Redis 发起一次异步调用，节点本身不保存任何状态。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">The binding constraint is <em>not</em> CPU on the gateway — it is the Redis round-trip latency and hot-shard throughput.
+        State explicitly: "I will keep this to one atomic Redis operation per request, sharded by clientId, so the p99 limiter
+        overhead stays under 5 ms regardless of platform QPS."</span><span class="zh">瓶颈约束<em>不是</em>网关的 CPU，而是 Redis 的往返延迟和热分片吞吐量。应明确说明："我会将每次请求控制在一次原子 Redis 操作内，按 clientId 分片，使限流器的 p99 开销保持在 5 毫秒以内，与平台整体 QPS 无关。"</span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API / behavior design</span><span class="zh">API / 行为设计</span></h2></div>
+      <p><span class="en">The rate limiter is <strong>gateway middleware</strong>, not a separate user-facing service. Its observable contract is
+      the set of response headers it injects on every request and the 429 it emits when a bucket is exhausted.</span><span class="zh">限流器是<strong>网关中间件</strong>，而非独立的用户端服务。其对外可见的契约是：在每次请求中注入的一组响应头，以及当令牌桶耗尽时返回的 429 状态码。</span></p>
+
+      <h4><span class="en">Response headers — REST (request-count bucket)</span><span class="zh">响应头 — REST（请求次数桶）</span></h4>
+      <div class="api">
+        <div class="row"><span class="method get">HDR</span><span class="path">X-RateLimit-Limit: 40</span><span class="desc">bucket capacity (requests per refill window)</span></div>
+        <div class="row"><span class="method get">HDR</span><span class="path">X-RateLimit-Remaining: 35</span><span class="desc">tokens left in this window</span></div>
+        <div class="row"><span class="method get">HDR</span><span class="path">X-RateLimit-Reset: 1718400060</span><span class="desc">Unix timestamp when bucket fully refills</span></div>
+        <div class="row"><span class="method del">429</span><span class="path">Retry-After: 3</span><span class="desc">seconds until next allowed request</span></div>
+      </div>
+
+      <h4><span class="en">Response body extension — GraphQL (cost-based bucket)</span><span class="zh">响应体扩展字段 — GraphQL（成本积分桶）</span></h4>
+      <div class="api">
+        <div class="row"><span class="method ws">EXT</span><span class="path">extensions.cost.requestedQueryCost</span><span class="desc"><span class="en">points this query cost (static analysis)</span><span class="zh">本次查询的静态分析成本积分</span></span></div>
+        <div class="row"><span class="method ws">EXT</span><span class="path">extensions.cost.actualQueryCost</span><span class="desc"><span class="en">points actually charged (after execution)</span><span class="zh">执行后实际扣除的成本积分</span></span></div>
+        <div class="row"><span class="method ws">EXT</span><span class="path">extensions.cost.throttleStatus.currentlyAvailable</span><span class="desc"><span class="en">points remaining in bucket</span><span class="zh">桶内剩余积分</span></span></div>
+        <div class="row"><span class="method ws">EXT</span><span class="path">extensions.cost.throttleStatus.restoreRate</span><span class="desc"><span class="en">points restored per second</span><span class="zh">每秒恢复的积分数</span></span></div>
+      </div>
+      <p><span class="en">Clients that embed cost metadata in their requests can use this to implement their own adaptive pacing —
+      a hallmark of a well-designed platform API.</span><span class="zh">将成本元数据嵌入请求的客户端可利用这些字段实现自适应调速——这是设计良好的平台 API 的重要特征。</span></p>
+    </section>
+
+    <!-- 4 DATA -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+
+      <h4><span class="en">Redis: token-bucket state per client</span><span class="zh">Redis：每个客户端的令牌桶状态</span></h4>
+      <pre><code><span class="c">-- Key schema (bucket per client)</span>
+<span class="k">bucket:{shopId}:{appId}</span>          <span class="c">// REST bucket: tokens + last_refill_ts (HASH)</span>
+<span class="k">gql_bucket:{shopId}:{appId}</span>      <span class="c">// GraphQL cost bucket: points + last_refill_ts (HASH)</span>
+
+<span class="c">-- HASH fields</span>
+<span class="n">tokens</span>          <span class="c">// current token/point count (float or integer)</span>
+<span class="n">last_refill</span>     <span class="c">// Unix ms timestamp of last computed refill</span></code></pre>
+
+      <h4><span class="en">Config store: per-plan rate-limit config</span><span class="zh">配置存储：按套餐的限流配置</span></h4>
+      <pre><code><span class="c">-- Postgres / config table (cached in-process, refreshed every 30 s)</span>
+<span class="k">rate_limit_config</span>(
+  plan_tier         <span class="c">-- 'basic' | 'advanced' | 'plus' | 'partner'</span>
+  api_type          <span class="c">-- 'rest' | 'graphql'</span>
+  bucket_capacity   <span class="c">-- max tokens / points</span>
+  refill_rate       <span class="c">-- tokens or points per second</span>
+  burst_capacity    <span class="c">-- optional burst ceiling above steady state</span>
+)</code></pre>
+
+      <h4><span class="en">Atomic Lua script — token bucket check + refill + decrement</span><span class="zh">原子 Lua 脚本——令牌桶检查 + 补充 + 扣减</span></h4>
+      <pre><code><span class="c">-- KEYS[1] = bucket key
+-- ARGV[1] = now (Unix ms)  ARGV[2] = cost  ARGV[3] = capacity  ARGV[4] = refill_rate (pts/ms)</span>
+
+<span class="k">local</span> data       = redis.call(<span class="s">'HMGET'</span>, KEYS[1], <span class="s">'tokens'</span>, <span class="s">'last_refill'</span>)
+<span class="k">local</span> tokens     = tonumber(data[1]) <span class="k">or</span> tonumber(ARGV[3])
+<span class="k">local</span> last       = tonumber(data[2]) <span class="k">or</span> tonumber(ARGV[1])
+<span class="k">local</span> elapsed    = tonumber(ARGV[1]) - last
+<span class="k">local</span> refilled   = math.min(tonumber(ARGV[3]),
+                     tokens + elapsed * tonumber(ARGV[4]))
+
+<span class="k">if</span> refilled &lt; tonumber(ARGV[2]) <span class="k">then</span>
+  <span class="c">-- update last_refill without deducting; return remaining + ms until enough</span>
+  redis.call(<span class="s">'HSET'</span>, KEYS[1], <span class="s">'tokens'</span>, refilled, <span class="s">'last_refill'</span>, ARGV[1])
+  redis.call(<span class="s">'PEXPIRE'</span>, KEYS[1], <span class="n">3600000</span>)
+  <span class="k">return</span> {<span class="n">0</span>, math.ceil((tonumber(ARGV[2]) - refilled) / tonumber(ARGV[4]))}
+<span class="k">end</span>
+
+<span class="k">local</span> remaining = refilled - tonumber(ARGV[2])
+redis.call(<span class="s">'HSET'</span>, KEYS[1], <span class="s">'tokens'</span>, remaining, <span class="s">'last_refill'</span>, ARGV[1])
+redis.call(<span class="s">'PEXPIRE'</span>, KEYS[1], <span class="n">3600000</span>)
+<span class="k">return</span> {<span class="n">1</span>, remaining}   <span class="c">-- {allowed, remaining}</span></code></pre>
+      <p><span class="en">The entire check-refill-decrement sequence is <strong>one atomic round trip</strong> to Redis — no race conditions possible
+      regardless of how many gateway nodes are running concurrently.</span><span class="zh">整个检查-补充-扣减序列是对 Redis 的<strong>一次原子往返请求</strong>——无论有多少网关节点并发运行，都不可能产生竞态条件。</span></p>
+    </section>
+
+    <!-- 5 ARCH -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">gateway middleware → shared Redis → upstream services</span><span class="zh">网关中间件 → 共享 Redis → 上游服务</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 530" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#dc2626"/>
+            </marker>
+          </defs>
+
+          <!-- Client → Gateways -->
+          <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)">
+            <!-- client to GW1 -->
+            <line x1="130" y1="68" x2="245" y2="120"/>
+            <!-- client to GW2 -->
+            <line x1="165" y1="68" x2="375" y2="120"/>
+            <!-- client to GW3 -->
+            <line x1="185" y1="68" x2="500" y2="120"/>
+
+            <!-- GW1 to Redis -->
+            <line x1="258" y1="172" x2="388" y2="218"/>
+            <!-- GW2 to Redis -->
+            <line x1="388" y1="172" x2="415" y2="218"/>
+            <!-- GW3 to Redis -->
+            <line x1="518" y1="172" x2="450" y2="218"/>
+
+            <!-- Redis to Upstream svcs (allow path) -->
+            <line x1="400" y1="276" x2="400" y2="316"/>
+
+            <!-- Upstream svc to REST API -->
+            <line x1="360" y1="370" x2="260" y2="418"/>
+            <!-- Upstream svc to GQL API -->
+            <line x1="440" y1="370" x2="540" y2="418"/>
+          </g>
+
+          <!-- 429 reject path (red dashed) -->
+          <g stroke="#dc2626" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)">
+            <!-- GW1 reject back to client -->
+            <line x1="240" y1="120" x2="148" y2="72"/>
+          </g>
+
+          <!-- Config service read arrow -->
+          <g stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)">
+            <line x1="600" y1="248" x2="450" y2="248"/>
+          </g>
+
+          <!-- NODES -->
+          <!-- Clients -->
+          <g>
+            <rect x="20" y="20" width="190" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="115" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">API Clients</text>
+            <text x="115" y="58" text-anchor="middle" font-size="10.5" fill="#64748b">apps · merchants · partners</text>
+          </g>
+
+          <!-- Gateway nodes (3) -->
+          <g>
+            <rect x="206" y="120" width="104" height="52" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="258" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1d4ed8">Gateway 1</text>
+            <text x="258" y="158" text-anchor="middle" font-size="10" fill="#2563eb">limiter middleware</text>
+          </g>
+          <g>
+            <rect x="336" y="120" width="104" height="52" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="388" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1d4ed8">Gateway 2</text>
+            <text x="388" y="158" text-anchor="middle" font-size="10" fill="#2563eb">limiter middleware</text>
+          </g>
+          <g>
+            <rect x="466" y="120" width="104" height="52" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="518" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1d4ed8">Gateway 3</text>
+            <text x="518" y="158" text-anchor="middle" font-size="10" fill="#2563eb">limiter middleware</text>
+          </g>
+
+          <!-- 429 label -->
+          <text x="158" y="106" font-size="10.5" fill="#dc2626" font-weight="700">429 rejected</text>
+
+          <!-- Redis bucket store (sharded) -->
+          <g>
+            <rect x="330" y="218" width="190" height="58" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="425" y="241" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis Cluster</text>
+            <text x="425" y="257" text-anchor="middle" font-size="10.5" fill="#dc2626">token buckets · sharded by clientId</text>
+            <text x="425" y="270" text-anchor="middle" font-size="10" fill="#dc2626">atomic Lua: check → refill → decr</text>
+          </g>
+
+          <!-- Config service (right) -->
+          <g>
+            <rect x="600" y="220" width="170" height="52" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="685" y="242" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Config Service</text>
+            <text x="685" y="258" text-anchor="middle" font-size="10.5" fill="#7c3aed">plan limits · refill rates</text>
+          </g>
+          <text x="525" y="236" font-size="10" fill="#7c3aed" text-anchor="middle">cached 30 s</text>
+
+          <!-- Upstream APIs (allow path) -->
+          <g>
+            <rect x="310" y="316" width="190" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="405" y="339" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Upstream Services</text>
+            <text x="405" y="356" text-anchor="middle" font-size="10.5" fill="#008060">request allowed · injects headers</text>
+          </g>
+
+          <!-- REST API downstream -->
+          <g>
+            <rect x="170" y="418" width="150" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="245" y="439" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">REST Handler</text>
+            <text x="245" y="455" text-anchor="middle" font-size="10" fill="#008060">request-count bucket</text>
+          </g>
+
+          <!-- GraphQL downstream -->
+          <g>
+            <rect x="480" y="418" width="160" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="560" y="439" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">GraphQL Handler</text>
+            <text x="560" y="455" text-anchor="middle" font-size="10" fill="#008060">cost-based bucket</text>
+          </g>
+
+          <!-- allow path label -->
+          <text x="418" y="308" font-size="10" fill="#008060" text-anchor="middle">allowed (headers injected)</text>
+
+          <!-- bucket shard label -->
+          <text x="130" y="248" font-size="10.5" fill="#64748b" text-anchor="middle">shard: hash(clientId)</text>
+          <line x1="196" y1="248" x2="328" y2="248" stroke="#64748b" stroke-width="1" stroke-dasharray="3 3"/>
+
+          <!-- vertical shard lines to show sharding -->
+          <text x="425" y="490" font-size="10.5" fill="#6b7280" text-anchor="middle">REST charges 1 token · GraphQL charges computed cost from static query analysis</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge / gateway</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache / bucket store (Redis)</span>
+          <span><i style="background:#7c3aed"></i> config / datastore</span>
+        </div>
+        <div class="cap"><span class="en">Every gateway node runs the limiter middleware synchronously. The shared Redis cluster is the single source of truth for bucket state.
+        Requests that exceed the limit get a 429 at the gateway; allowed requests flow to upstream services with rate-limit headers injected.</span><span class="zh">每个网关节点同步执行限流中间件。共享 Redis 集群是令牌桶状态的唯一权威来源。超过限额的请求在网关层直接返回 429；被放行的请求在注入限流响应头后转发至上游服务。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件详解</span></h4>
+      <ul>
+        <li><span class="en"><strong>API Clients</strong> — apps, merchants, and partners sending REST or GraphQL API requests. All traffic enters through the gateway tier.</span><span class="zh"><strong>API 客户端</strong>——发送 REST 或 GraphQL API 请求的应用、商户和合作伙伴。所有流量均通过网关层进入。</span></li>
+        <li><span class="en"><strong>Gateway nodes (stateless)</strong> — each node runs the same limiter middleware. On every request, the middleware resolves the <code>clientId</code>
+        (shop + app from the access token), loads the limit config from the local cache, and fires one atomic Lua call to Redis.</span><span class="zh"><strong>网关节点（无状态）</strong>——每个节点运行相同的限流中间件。每次请求时，中间件从访问令牌中解析出 <code>clientId</code>（商店 + 应用），从本地缓存加载限额配置，然后向 Redis 发起一次原子 Lua 调用。</span></li>
+        <li><span class="en"><strong>Redis Cluster (sharded by clientId)</strong> — the authoritative bucket store. Each shard holds a portion of the 10M+ client buckets.
+        The Lua script atomically computes elapsed-time refill, checks whether the request's cost fits, decrements if so, and returns the result — all in one network round trip.</span><span class="zh"><strong>Redis 集群（按 clientId 分片）</strong>——权威令牌桶存储。每个分片持有 1000 万以上客户端桶中的一部分。Lua 脚本原子性地计算时间流逝后的补充量、检查请求成本是否足够、若足够则扣减，并返回结果——全部在一次网络往返内完成。</span></li>
+        <li><span class="en"><strong>Config Service</strong> — holds per-plan limit config (capacity, refill rate). Gateways cache this locally for 30 s so a Redis call is not
+        needed just to look up limits. Updates propagate within one cache TTL.</span><span class="zh"><strong>配置服务</strong>——保存按套餐的限额配置（容量、补充速率）。网关在本地缓存 30 秒，无需为查询限额而调用 Redis。配置更新在一个缓存 TTL 内传播到所有节点。</span></li>
+        <li><span class="en"><strong>Upstream Services</strong> — only reached if the request is allowed. Rate-limit headers are injected before forwarding.
+        REST and GraphQL handlers apply their respective charging models.</span><span class="zh"><strong>上游服务</strong>——仅在请求被放行时才会被访问。转发前注入限流响应头。REST 和 GraphQL 处理器分别应用各自的计费模型。</span></li>
+        <li><span class="en"><strong>429 fast path</strong> — rejected requests are terminated at the gateway immediately, before any upstream compute is consumed. The
+        <code>Retry-After</code> value is computed from the Lua return value (ms until bucket refills enough) so clients can back off precisely.</span><span class="zh"><strong>429 快速路径</strong>——被拒绝的请求在网关层立即终止，不会消耗任何上游计算资源。<code>Retry-After</code> 值由 Lua 脚本返回值（桶补充至足够量所需毫秒数）精确计算得出，使客户端能够精准退避。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVE -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度剖析</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在之处</span></span></div>
+
+      <h3><span class="en">① Algorithm comparison — choosing the right bucket model</span><span class="zh">① 算法对比——选择正确的桶模型</span></h3>
+      <p><span class="en">Multiple algorithms exist; Shopify's REST API uses a <strong>leaky bucket / token bucket</strong>. Understanding why is as important as knowing how.</span><span class="zh">限流算法有多种；Shopify 的 REST API 使用<strong>漏桶/令牌桶</strong>。理解"为什么"与理解"怎么做"同等重要。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Algorithm</span><span class="zh">算法</span></th><th><span class="en">How it works</span><span class="zh">工作原理</span></th><th><span class="en">Pros</span><span class="zh">优点</span></th><th><span class="en">Cons</span><span class="zh">缺点</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Fixed window counter</span><span class="zh">固定窗口计数器</span></td>
+            <td><span class="en">Count requests in a fixed time window (e.g. 1 min). Reset at window boundary.</span><span class="zh">在固定时间窗口内计数（如 1 分钟），窗口边界处重置。</span></td>
+            <td><span class="en">Trivially cheap — one INCR + TTL</span><span class="zh">极其轻量——一次 INCR + TTL</span></td>
+            <td><span class="en">Boundary burst: client can double-rate at window edge (2× burst)</span><span class="zh">边界突发：客户端可在窗口边界处以 2 倍速率请求</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Sliding window log</span><span class="zh">滑动窗口日志</span></td>
+            <td><span class="en">Store timestamp of every request; count events in the last <em>T</em> seconds.</span><span class="zh">记录每次请求的时间戳，统计过去 <em>T</em> 秒内的事件数。</span></td>
+            <td><span class="en">Exact, no boundary burst</span><span class="zh">精确，无边界突发问题</span></td>
+            <td><span class="en">Memory-heavy: O(requests) storage per client; expensive to query</span><span class="zh">内存占用大：每个客户端 O(请求数) 存储；查询代价高</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Sliding window counter</span><span class="zh">滑动窗口计数器</span></td>
+            <td><span class="en">Blend current + previous fixed-window counts weighted by how far into current window</span><span class="zh">将当前窗口与前一窗口的计数按已进入当前窗口的比例加权混合</span></td>
+            <td><span class="en">Good accuracy, O(1) storage</span><span class="zh">精度较高，O(1) 存储</span></td>
+            <td><span class="en">Slight over-counting possible; implementation more complex</span><span class="zh">可能存在轻微过计；实现相对复杂</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Token bucket</span><span class="zh">令牌桶</span></td>
+            <td><span class="en">Bucket holds up to <em>C</em> tokens; refills at rate <em>R</em>/s. Each request consumes tokens.</span><span class="zh">桶最多持有 <em>C</em> 个令牌，以 <em>R</em> 个/秒补充。每次请求消耗令牌。</span></td>
+            <td><span class="en">Allows controlled bursts; smooth at steady state; supports variable-cost requests</span><span class="zh">允许受控突发；稳定状态下平滑；支持可变成本请求</span></td>
+            <td><span class="en">Requires storing tokens + last-refill timestamp; slight complexity in distributed setting</span><span class="zh">需存储令牌数 + 上次补充时间戳；分布式场景略复杂</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Leaky bucket</span><span class="zh">漏桶</span></td>
+            <td><span class="en">Requests enter a fixed-capacity queue; processed at fixed rate. Excess dropped.</span><span class="zh">请求进入固定容量的队列，以固定速率处理，超出部分丢弃。</span></td>
+            <td><span class="en">Output rate exactly bounded; no burst leakage</span><span class="zh">输出速率精确受限；无突发泄漏</span></td>
+            <td><span class="en">Buffers requests (adds latency for bursts); pure leaky bucket doesn't allow any burst</span><span class="zh">缓冲请求（突发时增加延迟）；纯漏桶不允许任何突发</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">What Shopify actually uses</span><span class="zh">Shopify 实际使用的方案</span></span>
+        <span class="en">Shopify's REST API documentation describes a <strong>leaky bucket</strong> model (marketing terminology) that functions as a
+        token bucket in implementation: a bucket of size 40 that drains at 2 requests/second. Effectively a token bucket
+        that allows burst up to capacity, then smooths to the refill rate. This is the right choice for an API: it absorbs
+        legitimate bursty app behavior while bounding sustained throughput.</span><span class="zh">Shopify 的 REST API 文档将其描述为<strong>漏桶</strong>模型（市场用语），但实现上等同于令牌桶：桶容量为 40，以每秒 2 次请求的速率漏出。实际上是一种令牌桶：允许突发直至容量上限，之后平滑到补充速率。这是 API 限流的正确选择：既能吸收合理的突发应用行为，又能限制持续吞吐量。</span>
+      </div>
+
+      <h3><span class="en">② GraphQL cost-based limiting — why request count is wrong</span><span class="zh">② GraphQL 基于成本的限流——为何请求次数计费是错的</span></h3>
+      <p><span class="en">A single GraphQL query can be trivially cheap (<code>{ shop { name } }</code>) or extremely expensive
+      (<code>{ orders(first:250) { lineItems(first:100) { ... } } }</code>). Counting them equally would allow
+      one deeply-nested query to consume as much server compute as 10,000 simple queries.</span><span class="zh">一次 GraphQL 查询可以非常廉价（<code>{ shop { name } }</code>），也可以极其昂贵（<code>{ orders(first:250) { lineItems(first:100) { ... } } }</code>）。若将它们等同计数，一个深度嵌套的查询就能消耗相当于 10,000 次简单查询的服务器计算资源。</span></p>
+
+      <p><span class="en">Shopify computes a <strong>query cost</strong> from the requested fields and connection limits using a static analysis
+      pass over the parsed query AST before execution:</span><span class="zh">Shopify 在执行前对已解析的查询 AST 进行静态分析，根据所请求的字段和连接限制计算<strong>查询成本</strong>：</span></p>
+      <pre><code><span class="c">-- Shopify's model: an object costs 1, a scalar costs 0, and a connection
+-- costs (first|last) × (cost of one node). Computed on the parsed AST, before execution.</span>
+
+<span class="k">def</span> cost(selection):
+    total = <span class="n">0</span>
+    <span class="k">for</span> field <span class="k">in</span> selection:
+        <span class="k">if</span> field.is_connection:
+            n = field.arg(<span class="s">'first'</span>) <span class="k">or</span> field.arg(<span class="s">'last'</span>) <span class="k">or</span> <span class="n">1</span>
+            total += n * (<span class="n">1</span> + cost(field.selection))   <span class="c"># n nodes, each = 1 + its children</span>
+        <span class="k">elif</span> field.is_object:
+            total += <span class="n">1</span> + cost(field.selection)
+        <span class="c"># scalar fields add 0</span>
+    <span class="k">return</span> total
+
+<span class="c">-- Example: orders(first:10) { lineItems(first:5) { title } }
+--   lineItems = 5 * (1 + 0) = 5;   orders = 10 * (1 + 5) = 60 points</span></code></pre>
+      <p><span class="en">The client's GraphQL point bucket typically has capacity ~1000 points, restoring at 50 points/second.
+      The computed cost is deducted atomically at request time. If the estimated cost exceeds available points, the
+      request is throttled <em>before</em> execution — no server compute wasted.</span><span class="zh">客户端的 GraphQL 积分桶容量通常约为 1000 积分，每秒恢复 50 积分。计算出的成本在请求时原子性地扣除。若估算成本超过可用积分，请求将在执行<em>之前</em>被限流——不浪费任何服务器计算资源。</span></p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Static vs runtime cost</span><span class="zh">静态成本 vs 运行时成本</span></span>
+        <span class="en">Static analysis (before execution) is fast but approximate — a query asking for <code>orders(first:250)</code>
+        may actually return 3 orders if few exist. So the limiter <strong>gates on the requested (estimated) cost</strong>
+        up front — you cannot know the real cost before running — then records the <code>actualQueryCost</code> and
+        <strong>refunds the difference</strong> (requested − actual) back into the bucket after execution.</span><span class="zh">静态分析（执行前）速度快但存在近似误差——一个请求 <code>orders(first:250)</code> 的查询，若数据库中订单数量少，实际可能只返回 3 条记录。因此限流器<strong>以请求时的（估算）成本为门控依据</strong>——在执行之前无法得知真实成本——随后记录 <code>actualQueryCost</code>，并在执行后将差值（估算 − 实际）<strong>退还</strong>回令牌桶。</span>
+      </div>
+
+      <h3><span class="en">③ Distributed enforcement — centralized Redis vs per-node local buckets</span><span class="zh">③ 分布式强制执行——集中式 Redis vs 节点本地桶</span></h3>
+      <p><span class="en">With 100 gateway nodes, each request can land on any node. Two enforcement approaches:</span><span class="zh">在 100 个网关节点的情况下，每个请求可能落在任意节点上。有两种强制执行方式：</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Centralized Redis (recommended)</span><span class="zh">集中式 Redis（推荐）</span></div>
+          <h4><span class="en">One authoritative bucket store</span><span class="zh">单一权威令牌桶存储</span></h4>
+          <p><span class="en">Every gateway node calls the Redis cluster for every request. Accuracy is near-perfect: all nodes share the same view of each client's bucket.</span><span class="zh">每个网关节点对每次请求都调用 Redis 集群。准确性接近完美：所有节点共享同一个客户端桶视图。</span></p>
+          <p><span class="en"><strong>Cost:</strong> one network round trip per request (~1–3 ms local AZ); Redis becomes a critical path dependency.</span><span class="zh"><strong>代价：</strong>每次请求一次网络往返（同可用区约 1–3 ms）；Redis 成为关键路径依赖。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Per-node local buckets + async sync</span><span class="zh">节点本地桶 + 异步同步</span></div>
+          <h4><span class="en">Each node tracks a fraction of the budget</span><span class="zh">每个节点跟踪预算的一部分</span></h4>
+          <p><span class="en">Each node holds a local bucket (1/N of the total budget). No network hop per request; extremely fast. Nodes reconcile periodically.</span><span class="zh">每个节点持有本地桶（总预算的 1/N）。每次请求无需网络跳转，极快。节点定期对账。</span></p>
+          <p><span class="en"><strong>Cost:</strong> approximate — a client can exceed the global limit by up to N× in the worst case (N = node count) before sync catches up.</span><span class="zh"><strong>代价：</strong>近似——在同步跟上之前，最坏情况下客户端可超出全局限额最多 N 倍（N = 节点数）。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Race conditions without atomicity</span><span class="zh">缺乏原子性导致的竞态条件</span></span>
+        <span class="en">If you implement the bucket check as separate GET → compute → SET operations without Lua atomicity, two gateway nodes
+        can read the same bucket value simultaneously, both decide the request is allowed, and both decrement — effectively
+        allowing 2× the intended traffic. This is a classic TOCTOU (time-of-check-time-of-use) race. The Lua script
+        eliminates this entirely: Redis executes it as a single atomic unit with no interleaving possible.
+        <strong>Never implement rate limiting with non-atomic multi-command sequences in Redis.</strong></span><span class="zh">如果将桶检查实现为独立的 GET → 计算 → SET 操作而不使用 Lua 原子性，两个网关节点可能同时读取相同的桶值，都判断请求被允许，然后都进行扣减——实际上放行了 2 倍预期流量。这是经典的 TOCTOU（检查时间-使用时间）竞态条件。Lua 脚本完全消除了这一问题：Redis 将其作为单个原子单元执行，不可能发生任何交错。<strong>永远不要用 Redis 的非原子多命令序列来实现限流。</strong></span>
+      </div>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Hot-key / hot-shard risk</span><span class="zh">热键/热分片风险</span></span>
+        <span class="en">A high-traffic merchant making 50k QPS can concentrate all those requests on a single Redis shard
+        (since the key is <code>bucket:{shopId}:{appId}</code>). Mitigations: (a) shard the Redis cluster by clientId hash
+        so each shard handles a different subset; (b) for the very hottest clients, consider a short-TTL local token cache
+        on the gateway (e.g. pre-purchase a batch of 100 tokens, use them locally, then replenish) — this trades slight
+        over-admission for a 100× reduction in Redis ops for that client.</span><span class="zh">一个产生 50k QPS 的高流量商户会将所有请求集中到单个 Redis 分片（因为键为 <code>bucket:{shopId}:{appId}</code>）。缓解措施：(a) 按 clientId 哈希对 Redis 集群分片，使每个分片处理不同的客户端子集；(b) 对于流量最高的客户端，考虑在网关上使用短 TTL 的本地令牌缓存（例如预先购买 100 个令牌批次，本地消耗，再补充）——以轻微的超额放行换取该客户端 Redis 操作量减少 100 倍。</span>
+      </div>
+
+      <h3><span class="en">④ Multi-tenant fairness — per-shop and per-app limits that compose</span><span class="zh">④ 多租户公平性——按商店和按应用限额的叠加组合</span></h3>
+      <p><span class="en">A single access token represents a specific <em>app installed on a specific shop</em>. Shopify's real model enforces
+      limits at multiple dimensions:</span><span class="zh">单个访问令牌代表<em>安装在特定商店上的特定应用</em>。Shopify 的真实模型在多个维度上强制执行限额：</span></p>
+      <ul>
+        <li><span class="en"><strong>Per-shop limits</strong>: each shop has a global API budget (across all installed apps). Prevents a shop from collectively exceeding platform-safe traffic.</span><span class="zh"><strong>按商店限额</strong>：每个商店拥有全局 API 预算（涵盖所有已安装应用）。防止一个商店的总请求量超出平台安全阈值。</span></li>
+        <li><span class="en"><strong>Per-app limits</strong>: each app has a per-shop budget. Prevents one noisy app from consuming all the shop's budget and starving other apps installed on the same shop.</span><span class="zh"><strong>按应用限额</strong>：每个应用拥有按商店计算的预算。防止一个吵闹的应用耗尽商店的全部预算，从而饿死同一商店上安装的其他应用。</span></li>
+        <li><span class="en"><strong>Per-access-token limits</strong>: for fine-grained tracking and revocation.</span><span class="zh"><strong>按访问令牌限额</strong>：用于精细化跟踪和撤销。</span></li>
+        <li><span class="en"><strong>Tiered by plan</strong>: a Shopify Plus merchant gets a larger bucket than a Basic plan merchant, reflecting their higher entitlement.</span><span class="zh"><strong>按套餐分级</strong>：Shopify Plus 商户获得比 Basic 套餐商户更大的桶，反映其更高的权益。</span></li>
+        <li><span class="en"><strong>Per-endpoint cost</strong>: certain endpoints (e.g. bulk operations, product list) can carry a higher per-request cost multiplier.</span><span class="zh"><strong>按端点成本</strong>：某些端点（如批量操作、产品列表）可携带更高的每请求成本系数。</span></li>
+      </ul>
+      <p><span class="en">In practice the gateway checks the most-restrictive bucket that applies: if the per-app budget is exhausted, the request is rejected even if the per-shop budget still has room.</span><span class="zh">实际上，网关检查适用的最严格桶：如果按应用预算已耗尽，即使按商店预算仍有余量，请求也会被拒绝。</span></p>
+
+      <h3><span class="en">⑤ Resilience — behavior when Redis is degraded</span><span class="zh">⑤ 高可用性——Redis 降级时的行为</span></h3>
+      <p><span class="en">The rate limiter is in the hot path of every API request. A Redis outage has platform-wide consequences; the
+      fail-open vs fail-closed decision is a policy choice with meaningful tradeoffs:</span><span class="zh">限流器处于每次 API 请求的热路径上。Redis 宕机会产生全平台影响；失败开放 vs 失败关闭是一个具有重要权衡的策略选择：</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Strategy</span><span class="zh">策略</span></th><th><span class="en">Behavior on Redis failure</span><span class="zh">Redis 故障时的行为</span></th><th><span class="en">Risk</span><span class="zh">风险</span></th><th><span class="en">Recommendation</span><span class="zh">建议</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Fail closed</span><span class="zh">失败关闭</span></td>
+            <td><span class="en">Reject all requests with 503 until Redis recovers</span><span class="zh">在 Redis 恢复前拒绝所有请求，返回 503</span></td>
+            <td><span class="en">Platform becomes unavailable — SLA breach, merchant revenue lost</span><span class="zh">平台不可用——违反 SLA，商户收入损失</span></td>
+            <td><span class="en">Too aggressive for most cases</span><span class="zh">对大多数场景过于激进</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Fail open (uncapped)</span><span class="zh">失败开放（无上限）</span></td>
+            <td><span class="en">Allow all requests, no limiting</span><span class="zh">放行所有请求，不做任何限制</span></td>
+            <td><span class="en">Overload risk; a bad actor can flood upstream services during the outage window</span><span class="zh">过载风险；恶意方可在故障窗口期内淹没上游服务</span></td>
+            <td><span class="en">Only acceptable with short outage window</span><span class="zh">仅在故障窗口极短时可接受</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Fail open (local cap)</span><span class="zh">失败开放（本地限流兜底）</span></td>
+            <td><span class="en">Fall back to a conservative per-node in-memory counter; allow at 1/N of normal limit per node</span><span class="zh">回退到保守的节点内存计数器；每节点以正常限额的 1/N 放行</span></td>
+            <td><span class="en">Slightly under-limiting; bounded overload risk</span><span class="zh">轻微限制不足；过载风险有界</span></td>
+            <td><span class="en"><strong>Recommended</strong>: protects availability while maintaining some protection</span><span class="zh"><strong>推荐</strong>：在保护可用性的同时维持一定防护</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout callout--info">
+        <span class="ct"><span class="en">Shopify's documented stance</span><span class="zh">Shopify 的官方立场</span></span>
+        <span class="en">The industry-standard recommendation for rate limiter resilience is <strong>fail open</strong> — protect service availability
+        over perfect enforcement. During a Redis outage, the primary business risk is merchants losing sales, not being over-served.
+        The conservative local-cap variant gives a good middle ground: availability is protected, and unlimited abuse is prevented.
+        Always log the fallback state so the operations team has visibility.</span><span class="zh">限流器高可用的行业标准建议是<strong>失败开放</strong>——将服务可用性置于完美执行之上。Redis 宕机期间，主要业务风险是商户损失销售额，而非被过度服务。保守的本地限流兜底方案提供了良好的中间地带：可用性得到保护，无限制滥用得以防范。始终记录降级状态日志，以便运营团队保持可见性。</span>
+      </div>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs to discuss</span><span class="zh">需要讨论的权衡</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">建议</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Algorithm accuracy vs cost</span><span class="zh">算法精度 vs 开销</span></td>
+            <td><span class="en">Fixed window — O(1) storage, one INCR; allows 2× burst at window edge</span><span class="zh">固定窗口——O(1) 存储，一次 INCR；窗口边界处允许 2 倍突发</span></td>
+            <td><span class="en">Token bucket — smooth, allows intentional burst, variable cost per request; slightly more complex state</span><span class="zh">令牌桶——平滑，允许有意突发，每请求成本可变；状态略复杂</span></td>
+            <td><span class="en"><strong>Token/leaky bucket</strong> for REST; matches Shopify's production model; burst is a feature, not a bug</span><span class="zh">REST 使用<strong>令牌桶/漏桶</strong>；与 Shopify 生产模型一致；突发是特性而非缺陷</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Centralized vs local enforcement</span><span class="zh">集中式 vs 本地强制执行</span></td>
+            <td><span class="en">Centralized Redis — accurate, 1–3 ms round trip per request, Redis is critical path</span><span class="zh">集中式 Redis——精确，每请求 1–3 ms 往返，Redis 是关键路径</span></td>
+            <td><span class="en">Per-node local buckets + async sync — sub-ms, no network hop; can over-admit by N× before reconciliation</span><span class="zh">节点本地桶 + 异步同步——亚毫秒，无网络跳转；对账前可超额放行 N 倍</span></td>
+            <td><span class="en"><strong>Centralized Redis</strong> for correctness; local pre-purchase of token batches only for extreme hot clients</span><span class="zh">以<strong>集中式 Redis</strong>保证正确性；仅对极热客户端使用本地令牌批次预购</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Request count vs cost-based limiting</span><span class="zh">请求次数 vs 基于成本的限流</span></td>
+            <td><span class="en">Count every request as 1 unit — simple, uniform</span><span class="zh">每次请求计为 1 单位——简单，统一</span></td>
+            <td><span class="en">Compute cost per request (GraphQL query analysis, endpoint weights) — fair, accurate, more complex</span><span class="zh">按请求计算成本（GraphQL 查询分析、端点权重）——公平，精确，更复杂</span></td>
+            <td><span class="en"><strong>Cost-based for GraphQL</strong>; request-count for REST. One size does not fit both protocols</span><span class="zh">GraphQL 使用<strong>基于成本的限流</strong>；REST 使用请求次数计费。一刀切不适合两种协议</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Fail open vs fail closed on store outage</span><span class="zh">存储宕机时的失败开放 vs 失败关闭</span></td>
+            <td><span class="en">Fail closed — no risk of over-admission; platform goes dark</span><span class="zh">失败关闭——无超额放行风险；平台不可用</span></td>
+            <td><span class="en">Fail open with conservative local cap — availability preserved; slight over-admission risk</span><span class="zh">失败开放加保守本地限流兜底——可用性得到保护；轻微超额放行风险</span></td>
+            <td><span class="en"><strong>Fail open with local cap</strong>; merchant availability outweighs strict enforcement during short outages</span><span class="zh"><strong>失败开放加本地限流兜底</strong>；短暂宕机期间，商户可用性优先于严格执行</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Global vs per-region limits</span><span class="zh">全局 vs 按地区限额</span></td>
+            <td><span class="en">Single global Redis — exact global accounting; cross-region latency to limiter (~50 ms)</span><span class="zh">单一全局 Redis——精确的全局计数；跨地区到限流器的延迟约 50 ms</span></td>
+            <td><span class="en">Per-region Redis — fast local check; client can use full global limit in each region simultaneously</span><span class="zh">按地区 Redis——快速本地检查；客户端可在每个地区同时使用完整的全局限额</span></td>
+            <td><span class="en"><strong>Per-region</strong> for latency; accept that global over-admission is bounded and acceptable at Shopify's traffic distribution</span><span class="zh">以<strong>按地区</strong>方案降低延迟；接受在 Shopify 流量分布下，全局超额放行有界且可接受</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">GraphQL cost: static vs runtime</span><span class="zh">GraphQL 成本：静态 vs 运行时</span></td>
+            <td><span class="en">Static analysis at parse time — fast, no execution overhead; may over-estimate cost</span><span class="zh">解析时静态分析——快速，无执行开销；可能高估成本</span></td>
+            <td><span class="en">Runtime measurement — exact; must allow request before you know the cost</span><span class="zh">运行时度量——精确；必须先放行请求才能得知真实成本</span></td>
+            <td><span class="en"><strong>Static estimate to gate</strong>; refund delta after execution if actual cost was lower (best of both)</span><span class="zh"><strong>以静态估算作为门控</strong>；若实际成本更低，执行后退还差值（兼取两者之长）</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">Redis outage — fail open or closed? How do you implement the fallback?</span><span class="zh">Redis 宕机——失败开放还是失败关闭？如何实现降级兜底？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Fail open with a conservative local cap is the right call for a platform where merchant revenue depends on availability.
+            Implementation: each gateway node maintains an in-memory token bucket per client (initialized on first request, sized at
+            <code>global_limit / node_count</code>). When Redis is unreachable (detected by circuit breaker with ~100 ms timeout),
+            the middleware falls back to the in-memory bucket. Log every fallback event. When Redis recovers, flush local state and
+            revert to the centralized path. The over-admission window is bounded to the outage duration and the local cap.</span><span class="zh">对于一个商户收入依赖可用性的平台，失败开放加保守本地限流兜底是正确选择。实现方式：每个网关节点为每个客户端维护一个内存令牌桶（首次请求时初始化，大小为 <code>global_limit / node_count</code>）。当 Redis 不可达（通过约 100 ms 超时的熔断器检测到）时，中间件回退到内存桶。记录每个降级事件。Redis 恢复后，清空本地状态，恢复到集中式路径。超额放行窗口受限于宕机持续时间和本地限额。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Clock skew across gateway nodes — does it affect correctness?</span><span class="zh">网关节点间的时钟偏差——会影响正确性吗？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Clock skew matters because the token-bucket Lua script uses <code>now</code> to compute elapsed time for refill.
+            If two nodes disagree on <code>now</code> by Δt, the computed refill can differ by <code>Δt × refill_rate</code> — for a
+            50 pts/s refill rate and 100 ms clock skew, the error is only 5 points, which is negligible for a 1000-point bucket.
+            Use NTP with sub-10ms accuracy (standard in cloud environments). Pass <code>now</code> as a Lua argument from the gateway
+            (Redis itself has its own clock via <code>TIME</code>); if you want to avoid gateway-clock dependency entirely, use
+            <code>redis.call('TIME')</code> inside the Lua script to get the Redis server's clock — this eliminates gateway clock
+            skew entirely and is the more robust approach.</span><span class="zh">时钟偏差是有影响的，因为令牌桶 Lua 脚本使用 <code>now</code> 来计算补充的时间间隔。如果两个节点对 <code>now</code> 的认知相差 Δt，计算出的补充量就会相差 <code>Δt × refill_rate</code>——对于 50 积分/秒的补充速率和 100 ms 的时钟偏差，误差仅为 5 积分，对于 1000 积分的桶来说可以忽略不计。使用精度低于 10 ms 的 NTP（云环境标配）。将 <code>now</code> 从网关作为参数传入 Lua（Redis 本身通过 <code>TIME</code> 命令提供时钟）；如果想完全避免对网关时钟的依赖，可在 Lua 脚本内使用 <code>redis.call('TIME')</code> 获取 Redis 服务器时钟——这完全消除了网关时钟偏差，是更健壮的做法。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Bursty vs sustained traffic — how does the token bucket handle legitimate bursts?</span><span class="zh">突发流量 vs 持续流量——令牌桶如何处理合理的突发？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">This is a feature of the token bucket design, not a problem. An app that has been idle for 10 seconds accumulates
+            <code>10 × refill_rate</code> tokens up to bucket capacity. It can then fire a burst of that many requests without
+            being throttled — the cost is paid from the accumulated reserve. Sustained traffic above the refill rate will drain
+            the bucket and get throttled. This is exactly the intended behavior: absorb legitimate bursts (e.g. a cron job that
+            processes orders in batches once per minute) while bounding sustained throughput. The bucket capacity controls
+            burst size; the refill rate controls sustained throughput. Both are configurable per plan tier.</span><span class="zh">这是令牌桶设计的特性，而非问题。一个空闲了 10 秒的应用最多可积累 <code>10 × refill_rate</code> 个令牌至桶的容量上限，然后可以发出同等数量的突发请求而不被限流——成本从积累的储备中扣除。持续超过补充速率的流量会耗尽令牌桶并触发限流。这正是预期行为：吸收合理的突发（例如每分钟批量处理订单的定时任务），同时限制持续吞吐量。桶容量控制突发大小，补充速率控制持续吞吐量，两者均可按套餐等级配置。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Ensuring distributed correctness without Redis becoming a central bottleneck</span><span class="zh">如何在不让 Redis 成为中心瓶颈的前提下保证分布式正确性？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Three strategies compose: (1) <strong>Shard Redis by clientId hash</strong> — each shard serves a disjoint set of clients,
+            so throughput scales linearly with shard count. No single shard sees the full platform QPS. (2) <strong>Token pre-purchase</strong>
+            for ultra-hot clients — the gateway pre-purchases a batch of tokens (e.g. 100) from Redis and serves them locally,
+            reducing Redis ops by 100×. The gateway re-purchases when the local reserve drops below a threshold. This trades a
+            bounded over-admission window for dramatically lower Redis pressure on hot keys. (3) <strong>Pipeline or connection pooling</strong>
+            — use persistent Redis connections from each gateway node; avoid per-request connection overhead.</span><span class="zh">三种策略组合使用：(1) <strong>按 clientId 哈希对 Redis 分片</strong>——每个分片服务于不相交的客户端集合，吞吐量随分片数线性扩展，没有单个分片会承受全平台 QPS。(2) 对超热客户端使用<strong>令牌预购</strong>——网关从 Redis 预购一批令牌（如 100 个）并在本地消耗，将 Redis 操作量减少 100 倍；本地储备低于阈值时再补购，以有界的超额放行窗口换取热键 Redis 压力的大幅降低。(3) <strong>Pipeline 或连接池</strong>——每个网关节点使用持久 Redis 连接，避免每次请求的连接开销。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Estimating GraphQL query cost accurately — static vs runtime tradeoffs</span><span class="zh">精确估算 GraphQL 查询成本——静态 vs 运行时权衡</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Static analysis runs on the parsed query AST before execution. It is fast (sub-millisecond) but approximate:
+            a query requesting <code>orders(first:250)</code> may actually return 3 orders, costing far less server compute than
+            estimated. Three strategies: (a) <strong>Charge static estimate, no refund</strong> — simple, conservative; clients
+            learn to write efficient queries. (b) <strong>Charge static, refund delta</strong> — deduct the static cost upfront,
+            then issue a credit for <code>estimated - actual</code> after execution; accurate but requires a second async Redis write.
+            (c) <strong>Require explicit cost hints</strong> — clients declare their expected cost in the request header; server validates
+            against static analysis with a tolerance band. Shopify uses a variant of (a) with the static estimate as the charged cost,
+            but exposes <code>actualQueryCost</code> in the response so clients can tune their queries.</span><span class="zh">静态分析在执行前对解析后的查询 AST 运行，速度快（亚毫秒级）但存在近似误差：一个请求 <code>orders(first:250)</code> 的查询实际可能只返回 3 条订单，消耗的服务器计算资源远少于估算值。三种策略：(a) <strong>按静态估算收费，不退款</strong>——简单保守；客户端会学着编写高效查询。(b) <strong>按静态估算收费，退还差值</strong>——预先扣除静态成本，执行后针对 <code>估算 - 实际</code> 发放积分退款；精确，但需要一次额外的异步 Redis 写入。(c) <strong>要求显式成本提示</strong>——客户端在请求头中声明预期成本，服务器以容差带对照静态分析进行验证。Shopify 使用 (a) 的变体，以静态估算作为计费成本，但在响应中暴露 <code>actualQueryCost</code>，供客户端优化查询。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">Per-region vs global limits — how do you keep them consistent?</span><span class="zh">按地区 vs 全局限额——如何保持一致性？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Pure per-region limits: a client gets a full bucket per region, effectively multiplying their allowed throughput
+            by the number of regions. This is often acceptable — most clients only call from one region. If a client geographically
+            distributes their API calls to circumvent limits, the fix is <strong>global limit accounts</strong>: a thin
+            cross-region consensus service (or a CRDTs-based distributed counter) holds the global truth. Each region's Redis
+            runs a local sub-bucket; the global service periodically reconciles and adjusts regional allocations. This adds complexity
+            and cross-region latency — deploy it only if global arbitrage is an observed abuse pattern. For most Shopify partners,
+            per-region is sufficient and the simpler choice.</span><span class="zh">纯按地区限额：客户端在每个地区获得完整的令牌桶，实际上将允许的吞吐量乘以地区数。这通常是可接受的——大多数客户端只从一个地区发起调用。如果客户端通过地理分散 API 调用来规避限制，解决方案是<strong>全局限额账户</strong>：一个轻量的跨地区共识服务（或基于 CRDT 的分布式计数器）持有全局真相；每个地区的 Redis 运行本地子桶，全局服务定期对账并调整各地区分配。这增加了复杂性和跨地区延迟——只有在观察到全局套利滥用模式时才部署。对大多数 Shopify 合作伙伴而言，按地区方案已足够且更简单。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you communicate limits to clients so they back off gracefully?</span><span class="zh">如何将限流信息传达给客户端，使其能够优雅地退避？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Every response must carry the standard rate-limit headers: <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code>, and — on a 429 — a <code>Retry-After</code> header with the precise number of seconds until the bucket refills enough to permit the next request. This value comes directly from the Lua script return value, so it is accurate to the millisecond. For GraphQL, embed the cost metadata in <code>extensions.cost</code> on every response (not just throttled ones) so clients can self-pace before hitting the limit. SDKs should implement automatic retry with <em>jitter</em> (randomized delay around the Retry-After value) to prevent thundering-herd re-entry after a burst. Document the headers and the cost model clearly in the API reference — a well-informed developer writes adaptive code; a confused one hammers retries.</span><span class="zh">每次响应都必须携带标准限流头部：<code>X-RateLimit-Limit</code>、<code>X-RateLimit-Remaining</code>、<code>X-RateLimit-Reset</code>，以及在返回 429 时附上 <code>Retry-After</code> 头部，精确表示距桶内令牌恢复到允许下一次请求所需的秒数。该值直接来自 Lua 脚本返回值，精度到毫秒。对于 GraphQL，应在每次响应的 <code>extensions.cost</code> 中嵌入成本元数据（不仅限于被限流的响应），让客户端在触达限流前主动调速。SDK 应实现带 <em>jitter</em>（在 Retry-After 值附近随机抖动）的自动重试，以防止大批请求在爆发后同时重入造成"惊群效应"。在 API 文档中清晰说明这些头部字段及成本计算模型——开发者信息充分才会编写自适应代码，否则只会盲目不断重试。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you allow short bursts but cap sustained abuse?</span><span class="zh">如何允许短时突发流量，同时限制持续滥用？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">This is the core insight of the token bucket: the two knobs — <em>bucket depth</em> (capacity) and <em>refill rate</em> — control burst and sustained throughput independently. Set <code>capacity = burst_ceiling</code> (e.g. 80 tokens for Shopify Plus) to allow a legitimate burst of that many requests immediately after an idle period. Set <code>refill_rate = sustained_limit</code> (e.g. 4 tokens/second) to cap how fast the bucket recovers, which bounds sustained throughput. A client can fire 80 requests in a second, then is limited to 4/s thereafter until it goes idle again. Tune these parameters per plan tier and monitor the distribution of actual burst sizes in production — a burst ceiling that trips 10% of legitimate Plus merchants is misconfigured.</span><span class="zh">这正是 token bucket 的核心设计：<em>桶深度</em>（容量）与<em>补充速率</em>这两个参数相互独立地控制突发量和持续吞吐量。将 <code>capacity</code> 设置为突发上限（例如 Shopify Plus 为 80 个令牌），以允许在空闲期后立即发出同等数量的请求。将 <code>refill_rate</code> 设置为持续限速（例如每秒 4 个令牌），限制桶的恢复速度，从而约束持续吞吐量。客户端可以在一秒内发出 80 次请求，此后每秒只能发出 4 次，直到再次进入空闲状态。应按套餐等级分别调整这两个参数，并在生产环境中监控实际突发大小的分布——如果突发上限会触发 10% 的合法 Plus 商户被限流，说明配置有误。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A trusted partner needs a higher limit — how do you configure tiers dynamically?</span><span class="zh">受信任的合作伙伴需要更高限额——如何动态配置等级？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The limit config must be externalized from the gateway binary into a config service (e.g. a small Postgres table or a dedicated feature-flag store). Each row in the <code>rate_limit_config</code> table represents a plan/tier (Basic, Advanced, Plus, Partner, or a named partner override). The gateway caches this in-process with a 30-second TTL; a hot-reload event or a short TTL expiry picks up new values without a redeploy or restart. To grant a specific partner a higher limit, insert or update a row for their <code>clientId</code> (or plan tag) and push the change to the config store — all gateways reflect it within one TTL window. This pattern also supports A/B testing of limit values and emergency throttle-down by pushing a config change, not a code change.</span><span class="zh">限流配置必须从网关代码中抽离，存入独立的配置服务（例如一张小的 Postgres 表或专用的功能开关存储）。<code>rate_limit_config</code> 表中的每一行代表一个套餐/等级（Basic、Advanced、Plus、Partner 或指定合作伙伴的覆盖配置）。网关在进程内缓存该配置，TTL 为 30 秒；缓存过期或热重载事件会自动拉取新值，无需重新部署或重启服务。若要为特定合作伙伴授予更高限额，只需在配置表中插入或更新该合作伙伴的 <code>clientId</code>（或套餐标签）对应的行，变更推送到配置存储后，所有网关节点会在一个 TTL 窗口内生效。这一模式同样支持限流值的 A/B 测试，以及通过推送配置变更（而非代码变更）实现紧急降流。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you rate-limit unauthenticated/login endpoints to stop credential stuffing?</span><span class="zh">如何对未认证/登录端点进行限流以阻止撞库攻击？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Authentication endpoints require a different limiting strategy because the client identity is unknown before the request succeeds. Apply <strong>two independent buckets in parallel</strong>: a per-IP bucket (blocks volumetric attacks from a single source) and a per-account bucket (blocks distributed attacks targeting one account from many IPs). Set the limits stricter than regular API endpoints — e.g. 5 failed login attempts per account per 15 minutes rather than the normal request-per-second budget. On repeated failures, escalate progressively: first return a rate-limit header, then introduce a <code>Retry-After</code> delay with exponential backoff (10 s → 30 s → 5 min), then trigger a CAPTCHA challenge or lock the account pending email verification. Never disclose via the error response whether the account exists, as that leaks account enumeration information to attackers.</span><span class="zh">认证端点需要不同的限流策略，因为在请求成功之前客户端身份尚不明确。应<strong>并行应用两个独立的令牌桶</strong>：一个基于 IP（拦截来自单一来源的大流量攻击），另一个基于账号（拦截来自多个 IP 针对同一账号的分布式攻击）。限制阈值应比常规 API 端点更严格——例如每个账号每 15 分钟最多允许 5 次失败登录，而非正常的每秒请求配额。在多次失败后采用递进升级策略：首先返回限流头部，然后引入带指数退避的 <code>Retry-After</code> 延迟（10 秒 → 30 秒 → 5 分钟），再触发 CAPTCHA 验证或锁定账号等待邮件确认。错误响应中切勿暴露账号是否存在，避免攻击者利用账号枚举漏洞。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How is the distributed counter kept accurate during Redis cluster resharding?</span><span class="zh">Redis 集群重新分片期间，分布式计数器如何保持准确？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Resharding moves hash slots between Redis nodes, which means a bucket key can be temporarily unavailable or in-flight during the migration. Two mitigations work together. First, use <strong>hash-tag keys</strong> (<code>bucket:{shopId}:{appId}</code> is fine as written — the curly-brace tag ensures the key always routes to the slot of <code>shopId:appId</code>), so the key's slot is stable and the atomic Lua script runs entirely on one node with no cross-slot issues. Second, during a live resharding event, the Redis Cluster protocol may return a <code>MOVED</code> or <code>ASK</code> redirect for the migrating slot; the client library follows the redirect transparently. For the brief window while a key is being migrated, the worst case is a slightly stale counter or a single request that sees an empty bucket and behaves as if it is a new client. Handle this by treating <code>MOVED</code>/<code>ASK</code> errors with a fail-open local cap (as in the Redis-down path) — the error rate during resharding is very low and brief.</span><span class="zh">重新分片会将哈希槽在 Redis 节点间迁移，意味着桶键在迁移过程中可能短暂不可用或处于传输中状态。两种措施共同应对这一问题。首先，使用<strong>哈希标签键</strong>（<code>bucket:{shopId}:{appId}</code> 格式本身已满足要求——花括号标签确保该键始终路由到 <code>shopId:appId</code> 对应的哈希槽），使键的槽位保持稳定，且原子 Lua 脚本完全在单节点上执行，不存在跨槽问题。其次，在实时重分片事件期间，Redis Cluster 协议可能为正在迁移的槽返回 <code>MOVED</code> 或 <code>ASK</code> 重定向，客户端库会透明地跟随重定向。在键迁移的短暂窗口内，最坏情况是计数器略微过期，或有一个请求遇到空桶而被当作新客户端处理。对此的处理方式是：将 <code>MOVED</code>/<code>ASK</code> 错误视同 Redis 宕机，采用失败开放的本地限流兜底——重分片期间的错误率极低且持续时间极短。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you test and observe rate limiting in production?</span><span class="zh">如何在生产环境中测试和观测限流效果？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Observability requires three layers. <strong>Metrics</strong>: instrument the limiter middleware to emit per-tier counters for allowed requests, denied requests (429s), and near-limit requests (bucket &lt; 10% remaining). Alert on 429 rate spikes and near-limit client counts — a sudden surge in near-limit clients predicts an imminent 429 storm. <strong>Load testing</strong>: run synthetic traffic at 2× peak QPS against a staging environment with realistic clientId distributions; verify that the correct clients are throttled, 429s carry accurate <code>Retry-After</code>, and Redis p99 stays under 5 ms. <strong>Shadow mode</strong>: before enforcing a new tier or stricter limit in production, run the new config in shadow mode — the limiter evaluates the new rules and logs what <em>would have</em> been throttled without actually blocking anything. This validates that the new config does not accidentally throttle legitimate Plus merchants before you flip the enforcement flag.</span><span class="zh">可观测性需要三个层次。<strong>指标监控</strong>：在限流中间件中埋点，按等级输出已放行请求数、拒绝请求数（429）以及接近限额请求数（桶剩余量 &lt; 10%）的计数器。对 429 速率突增和接近限额客户端数量设置告警——接近限额客户端数量的突然激增预示着即将爆发的 429 风暴。<strong>压力测试</strong>：在预发布环境中用 2 倍峰值 QPS 的合成流量、真实的 clientId 分布进行测试，验证正确的客户端被限流、429 响应携带准确的 <code>Retry-After</code>，以及 Redis p99 延迟保持在 5 毫秒以内。<strong>影子模式</strong>：在生产环境正式执行新等级或更严格的限制之前，先以影子模式运行新配置——限流器评估新规则并记录哪些请求<em>本应</em>被限流，而不实际拦截任何请求。这能在切换执行开关之前，验证新配置是否会误杀合法的 Plus 商户。</span></p>
+          </div>
+        </details>
+      </div>
+
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these in order</span><span class="zh">Staff 级总结——按顺序说出这些要点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Token/leaky bucket algorithms</strong> for REST: they smooth sustained throughput while allowing legitimate bursts, matching how real apps behave.</span><span class="zh">REST 使用<strong>令牌桶/漏桶算法</strong>：平滑持续吞吐量的同时允许合理突发，与真实应用行为相符。</span></li>
+          <li><span class="en"><strong>Cost-based limiting for GraphQL</strong>: request count is the wrong unit when one query can be arbitrarily expensive. Compute cost from query AST, debit a points bucket.</span><span class="zh">GraphQL 使用<strong>基于成本的限流</strong>：当一次查询的代价可以任意大时，请求次数是错误的度量单位。从查询 AST 计算成本，从积分桶中扣除。</span></li>
+          <li><span class="en"><strong>Atomic Lua in centralized Redis</strong>, sharded by clientId: the check-refill-decrement is one round trip, one atomic operation, no race conditions possible. Shard to avoid hot-key concentration.</span><span class="zh">在按 clientId 分片的<strong>集中式 Redis 中使用原子 Lua 脚本</strong>：检查-补充-扣减是一次往返、一次原子操作，不可能产生竞态条件。分片以避免热键集中。</span></li>
+          <li><span class="en"><strong>Explicit fail-open decision</strong> to protect platform availability: fall back to a conservative per-node local cap when Redis is degraded — never silently drop all traffic.</span><span class="zh"><strong>明确的失败开放决策</strong>以保护平台可用性：Redis 降级时回退到保守的节点本地限流兜底——永远不要静默丢弃所有流量。</span></li>
+          <li><span class="en"><strong>Multi-tenant fairness</strong> via composing per-shop + per-app limits: one noisy app cannot exhaust a shop's budget and cannot affect other merchants on the platform.</span><span class="zh">通过叠加按商店 + 按应用限额实现<strong>多租户公平性</strong>：一个吵闹的应用既不能耗尽某个商店的预算，也不能影响平台上的其他商户。</span></li>
+          <li><span class="en"><strong>Always return <code>Retry-After</code></strong> so well-behaved clients can back off precisely rather than hammering the 429 response — this is the difference between a rate limiter that helps clients and one that punishes them.</span><span class="zh"><strong>始终返回 <code>Retry-After</code></strong>，让行为良好的客户端能精准退避，而非反复冲击 429 响应——这是一个帮助客户端的限流器与惩罚客户端的限流器之间的本质区别。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">InterviewQuery — Shopify Software Engineer interview guide (rate limiting, API design)</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview patterns (token bucket, multi-tenancy)</a></li>
+        <li><a href="https://www.designgurus.io/answers/detail/what-shopify-system-design-interview-questions-to-prepare">DesignGurus — Shopify system design questions to prepare (platform protection, GraphQL limiting)</a></li>
+      </ul>
+      <p style="margin-top:14px;">
+        <a href="07_webhook_delivery.html">← 07 · Webhook Delivery</a>
+        &nbsp;·&nbsp;
+        <a href="09_notification_system.html">09 · Notification System →</a>
+      </p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Summary · 重点速览 — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+
+</style>
+<style>
+/* summary-page specifics */
+.sumcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 22px 20px;margin:16px 0;box-shadow:var(--shadow-sm);scroll-margin-top:70px;}
+.sumcard .sc-head{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line-soft);padding-bottom:10px;margin-bottom:8px;}
+.sumcard .sc-num{flex:none;width:30px;height:30px;border-radius:8px;background:var(--shopify);color:#fff;display:grid;place-items:center;font-weight:800;font-size:14px;}
+.sumcard h3{margin:0;font-size:17px;}
+.sumcard .sc-head a{margin-left:auto;font-size:12.5px;font-weight:700;}
+.must li{margin:3px 0;}
+.mini{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:10px 0 2px;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ <span class="en">Summary · key points</span><span class="zh">重点速览</span></span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← <span class="en">All questions</span><span class="zh">全部题目</span></a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">Jump to</span><span class="zh">跳转</span></h4>
+    <a href="#framework"><span class="n">·</span> <span class="en">Framework</span><span class="zh">通用框架</span></a>
+    <a href="#q01"><span class="n">01</span> <span class="en">Flash Sale</span><span class="zh">抢购</span></a>
+    <a href="#q02"><span class="n">02</span> <span class="en">Inventory</span><span class="zh">库存</span></a>
+    <a href="#q03"><span class="n">03</span> <span class="en">Checkout</span><span class="zh">结账支付</span></a>
+    <a href="#q04"><span class="n">04</span> <span class="en">Multi-tenant</span><span class="zh">多租户</span></a>
+    <a href="#q05"><span class="n">05</span> <span class="en">Cart</span><span class="zh">购物车</span></a>
+    <a href="#q06"><span class="n">06</span> <span class="en">Search</span><span class="zh">搜索</span></a>
+    <a href="#q07"><span class="n">07</span> <span class="en">Webhooks</span><span class="zh">Webhook</span></a>
+    <a href="#q08"><span class="n">08</span> <span class="en">Rate limit</span><span class="zh">限流</span></a>
+    <a href="#q09"><span class="n">09</span> <span class="en">Notifications</span><span class="zh">通知</span></a>
+    <a href="#q10"><span class="n">10</span> <span class="en">Analytics</span><span class="zh">分析</span></a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow"><span class="en">Cheat sheet</span><span class="zh">速记单</span></div>
+      <h1><span class="en">Key points to hit — one page</span><span class="zh">面试必讲重点 · 一页速览</span></h1>
+      <p>
+        <span class="en">For each question: the one-line problem, the <strong>must-hit points</strong> that signal staff level, the core trade-off, and the highest-frequency follow-up. Open the full page for the deep dive. Use the <strong>中文</strong> toggle (top-right) to switch language.</span>
+        <span class="zh">每道题给出:一句话问题、体现 staff 水平的<strong>必讲重点</strong>、核心权衡、以及最高频的追问。点链接进入完整页面看深挖。右上角 <strong>EN/中文</strong> 按钮切换语言。</span>
+      </p>
+    </div>
+
+    <div class="callout callout--staff">
+      <span class="ct">⭐ <span class="en">Say this in the first 2 minutes of every question</span><span class="zh">每道题开场 2 分钟必说</span></span>
+      <span class="en">Frame the design through Shopify's lens: <strong>"does this protect the merchant's sale?"</strong> Put strong consistency where money lives (inventory, payments, orders); let storefront reads be eventual. Design for the <strong>spike</strong> (BFCM / flash sale), and for <strong>multi-tenant isolation</strong> (one merchant must not hurt another).</span>
+      <span class="zh">用 Shopify 的视角切入:<strong>"这个设计能不能保住商家的成交?"</strong> 在和钱相关的地方(库存、支付、订单)用强一致;店面读取可以最终一致。为<strong>流量尖峰</strong>(黑五 / 抢购)而设计,并保证<strong>多租户隔离</strong>(一个商家不能拖垮另一个)。</span>
+    </div>
+
+    <!-- FRAMEWORK -->
+    <section class="step" id="framework" data-accent="arch">
+      <div class="step-head"><span class="step-num">F</span>
+        <h2><span class="en">The 8-step framework</span><span class="zh">8 步框架</span></h2>
+      </div>
+      <div class="framework">
+        <div class="fw"><div class="num">01</div><div class="t"><span class="en">Clarify</span><span class="zh">澄清</span></div><div class="d"><span class="en">Functional + non-functional</span><span class="zh">功能 + 非功能</span></div></div>
+        <div class="fw"><div class="num">02</div><div class="t"><span class="en">Estimate</span><span class="zh">估算</span></div><div class="d"><span class="en">QPS, storage, hot key</span><span class="zh">QPS、存储、热点</span></div></div>
+        <div class="fw"><div class="num">03</div><div class="t">API</div><div class="d"><span class="en">A few sharp endpoints</span><span class="zh">几个关键接口</span></div></div>
+        <div class="fw"><div class="num">04</div><div class="t"><span class="en">Data model</span><span class="zh">数据模型</span></div><div class="d"><span class="en">Schema + access</span><span class="zh">表结构 + 访问</span></div></div>
+        <div class="fw"><div class="num">05</div><div class="t"><span class="en">Architecture</span><span class="zh">架构</span></div><div class="d"><span class="en">3 flows, drawn apart</span><span class="zh">三流分开画</span></div></div>
+        <div class="fw"><div class="num">06</div><div class="t"><span class="en">Deep dive</span><span class="zh">深挖</span></div><div class="d"><span class="en">The bottleneck</span><span class="zh">瓶颈/风险</span></div></div>
+        <div class="fw"><div class="num">07</div><div class="t"><span class="en">Trade-offs</span><span class="zh">权衡</span></div><div class="d"><span class="en">Name axis, pick</span><span class="zh">点明取舍并选择</span></div></div>
+        <div class="fw"><div class="num">08</div><div class="t"><span class="en">Follow-ups</span><span class="zh">追问</span></div><div class="d"><span class="en">Failure, scale</span><span class="zh">故障、扩展</span></div></div>
+      </div>
+      <div class="callout callout--info">
+        <span class="ct"><span class="en">Time budget</span><span class="zh">时间分配</span></span>
+        <span class="en">~10 min on scope, then move fast to a working diagram so 20+ min remain for the deep dive — that is where staff signal lives. Draw <strong>request flow, data flow, event flow separately</strong>.</span>
+        <span class="zh">~10 分钟定范围,然后尽快画出可用架构图,留 20+ 分钟给深挖 —— staff 信号都在深挖里。把<strong>请求流、数据流、事件流分开画</strong>。</span>
+      </div>
+    </section>
+
+    <!-- Q01 -->
+    <div class="sumcard" id="q01">
+      <div class="sc-head"><span class="sc-num">1</span><h3>🔥 <span class="en">Flash Sale / BFCM</span><span class="zh">抢购 / 黑五尖峰</span></h3><a href="01_flash_sale.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> 1,000 units, 1M buyers, sells out in 10s — never oversell, don't melt the rest of Shopify.</span><span class="zh"><strong>问题:</strong>1000 件商品、100 万买家、10 秒售罄 —— 绝不超卖,且不能拖垮 Shopify 其它部分。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Shed at the cheapest layer</strong> — kill the herd at the edge (virtual waiting room), meter a thin admitted stream; do NOT scale checkout 1000×.</span><span class="zh"><strong>在最便宜的层卸流</strong> —— 在边缘用虚拟等候室拦住人潮,只放出一条细流;不要把结账扩容 1000 倍。</span></li>
+        <li><span class="en"><strong>Defense in depth</strong> on "never oversell": Redis atomic <code>DECRBY</code> gate (fast) + DB conditional <code>UPDATE … WHERE qty_sold &lt; total</code> (durable truth) + reconciliation (catches drift).</span><span class="zh"><strong>纵深防御</strong>防超卖:Redis 原子 <code>DECRBY</code> 闸门(快) + 数据库条件更新 <code>WHERE qty_sold &lt; total</code>(持久的真相) + 对账(发现漂移)。</span></li>
+        <li><span class="en"><strong>Name the Redis durability gap</strong> — DB is authoritative; Redis is a fast front gate that can only over-reject, never oversell.</span><span class="zh"><strong>主动点出 Redis 的持久性缺口</strong> —— 数据库才是权威;Redis 只是快速前置闸门,最多多拒绝,绝不会超卖。</span></li>
+        <li><span class="en"><strong>Isolate the sale</strong> — dedicated fleet/pod + kill switch so one drop can't hurt two million other merchants.</span><span class="zh"><strong>隔离这场抢购</strong> —— 专用机群/pod + 熔断开关,一场抢购不能影响其它两百万商家。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> reserve-then-pay (needs TTL release) vs pay-then-decrement. <strong>Follow-up:</strong> Redis dies mid-sale? strict FIFO fairness?</span><span class="zh"><strong>权衡:</strong>先预留后付款(需 TTL 释放) vs 先付款后扣减。<strong>追问:</strong>抢购中途 Redis 挂了怎么办?要严格 FIFO 公平吗?</span></p>
+    </div>
+
+    <!-- Q02 -->
+    <div class="sumcard" id="q02">
+      <div class="sc-head"><span class="sc-num">2</span><h3>📦 <span class="en">Global Inventory</span><span class="zh">全局库存</span></h3><a href="02_inventory_management.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> stock across many locations & channels; never oversell, stay available, near-real-time.</span><span class="zh"><strong>问题:</strong>跨多仓库、多渠道的库存;绝不超卖、保持可用、近实时。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en">Model three counters: <code>available = on_hand − committed − reserved</code> (not one number).</span><span class="zh">用三个计数器建模:<code>可售 = 在库 − 已承诺 − 已预留</code>(不是单一数字)。</span></li>
+        <li><span class="en">Correctness lives in the <strong>conditional decrement</strong>: <code>UPDATE … WHERE available ≥ 1</code> (optimistic concurrency); the DB is the arbiter.</span><span class="zh">正确性在于<strong>条件扣减</strong>:<code>UPDATE … WHERE available ≥ 1</code>(乐观并发);数据库是裁判。</span></li>
+        <li><span class="en"><strong>Append-only ledger = audit truth</strong>; the inventory level is a materialized view you can rebuild & reconcile.</span><span class="zh"><strong>只追加的流水账 = 审计真相</strong>;库存数量是可重建、可对账的物化视图。</span></li>
+        <li><span class="en">Read scale via <strong>cache + CDC invalidation</strong>; degrade to "sold out" gracefully, never oversell.</span><span class="zh">用<strong>缓存 + CDC 失效</strong>扛读取;优雅降级为"已售罄",绝不超卖。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> optimistic vs pessimistic locking; strong (own checkout) vs eventual (marketplaces). <strong>Follow-up:</strong> two channels sell the last unit at the same instant?</span><span class="zh"><strong>权衡:</strong>乐观 vs 悲观锁;强一致(自家结账) vs 最终一致(第三方平台)。<strong>追问:</strong>两个渠道同一刻卖出最后一件怎么办?</span></p>
+    </div>
+
+    <!-- Q03 -->
+    <div class="sumcard" id="q03">
+      <div class="sc-head"><span class="sc-num">3</span><h3>💳 <span class="en">Checkout & Payments</span><span class="zh">结账与支付</span></h3><a href="03_checkout_payments.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> multi-region, idempotent checkout that survives a payment-gateway outage and never double-charges.</span><span class="zh"><strong>问题:</strong>多区域、幂等的结账,能扛住支付网关故障,绝不重复扣款。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Idempotency key end-to-end</strong> (client → us → PSP): store key + request hash + response; retries return the stored result, never re-charge.</span><span class="zh"><strong>幂等键贯穿全链路</strong>(客户端 → 我们 → 支付商):存键 + 请求哈希 + 响应;重试返回已存结果,绝不再扣款。</span></li>
+        <li><span class="en"><strong>Order = durable source of truth; payment = state machine</strong> (INITIATED→AUTHORIZED→CAPTURED…).</span><span class="zh"><strong>订单 = 持久真相;支付 = 状态机</strong>(发起→授权→扣款…)。</span></li>
+        <li><span class="en"><strong>Outbox pattern</strong> eliminates the dual-write problem: write order + event in one TX, relay publishes to Kafka.</span><span class="zh"><strong>Outbox 模式</strong>消除双写问题:订单 + 事件在同一事务写入,由中继发布到 Kafka。</span></li>
+        <li><span class="en"><strong>Saga with explicit compensation</strong>; treat the PSP as unreliable — circuit-break, failover, reconcile.</span><span class="zh"><strong>Saga + 显式补偿</strong>;把支付商当作不可靠依赖 —— 熔断、切备用、对账。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> orchestration vs choreography saga; sync vs async capture. <strong>Follow-up:</strong> network timed out after we called the PSP — did the charge go through?</span><span class="zh"><strong>权衡:</strong>编排式 vs 协同式 saga;同步 vs 异步扣款。<strong>追问:</strong>调用支付商后网络超时 —— 到底扣没扣?</span></p>
+    </div>
+
+    <!-- Q04 -->
+    <div class="sumcard" id="q04">
+      <div class="sc-head"><span class="sc-num">4</span><h3>🏢 <span class="en">Multi-Tenant (Pods)</span><span class="zh">多租户(Pods)</span></h3><a href="04_multi_tenant_sharding.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> millions of shops on shared infra — shard, isolate, move a shop with zero downtime.</span><span class="zh"><strong>问题:</strong>数百万店铺共享基础设施 —— 分片、隔离、零停机迁移店铺。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en">Shard by <code>shop_id</code>; group shards into <strong>self-contained pods</strong> (app+DB+Redis) for <strong>blast-radius isolation</strong>.</span><span class="zh">按 <code>shop_id</code> 分片;把分片打包成<strong>自包含的 pod</strong>(应用+库+Redis),实现<strong>爆炸半径隔离</strong>。</span></li>
+        <li><span class="en">Routing brain = a <strong>highly-available, edge-cached shard map</strong> (shop → shard → pod).</span><span class="zh">路由大脑 = <strong>高可用、边缘缓存的分片表</strong>(shop → shard → pod)。</span></li>
+        <li><span class="en">Online shop move = <strong>copy → replay change-log → verify → atomically flip the map</strong>.</span><span class="zh">在线迁移店铺 = <strong>复制 → 重放变更日志 → 校验 → 原子切换分片表</strong>。</span></li>
+        <li><span class="en">Protect against noisy neighbors with per-shop quotas; keep the hot path single-shard; push cross-tenant queries to a derived store.</span><span class="zh">用按店配额防"吵闹邻居";热路径保持单分片;跨租户查询交给派生存储。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> shared-table vs schema vs shard-per-group; central lookup vs hash routing. <strong>Follow-up:</strong> a whale merchant outgrows one shard?</span><span class="zh"><strong>权衡:</strong>共享表 vs 独立 schema vs 分片分组;中心查表 vs 哈希路由。<strong>追问:</strong>巨型商家撑爆单个分片怎么办?</span></p>
+    </div>
+
+    <!-- Q05 -->
+    <div class="sumcard" id="q05">
+      <div class="sc-head"><span class="sc-num">5</span><h3>🛒 <span class="en">Shopping Cart</span><span class="zh">购物车</span></h3><a href="05_shopping_cart.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> carts for anonymous + logged-in users, merged on login, available during spikes.</span><span class="zh"><strong>问题:</strong>匿名 + 登录用户的购物车,登录时合并,尖峰期保持可用。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en">A cart is <strong>AP, not money-critical</strong> — favor availability; degrade gracefully under load.</span><span class="zh">购物车是 <strong>AP、非金钱关键</strong> —— 优先可用性;高负载下优雅降级。</span></li>
+        <li><span class="en"><strong>KV single-document storage</strong> (Redis/DynamoDB) keyed by cart_id — high write, ephemeral, single-key access.</span><span class="zh">用 <strong>KV 单文档存储</strong>(Redis/DynamoDB),按 cart_id 取 —— 高写入、易失、单键访问。</span></li>
+        <li><span class="en"><strong>Merge on login</strong> with explicit conflict rules (sum quantities, cap, dedupe).</span><span class="zh"><strong>登录时合并</strong>并定义明确冲突规则(数量相加、设上限、去重)。</span></li>
+        <li><span class="en"><strong>Never reserve inventory in the cart</strong> — snapshot price for display, re-validate price & stock at checkout. TTL + abandonment events.</span><span class="zh"><strong>购物车里绝不预留库存</strong> —— 加购时快照价格用于展示,结账时重新校验价格与库存。TTL + 弃购事件。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> AP vs CP; LWW vs versioned concurrency. <strong>Follow-up:</strong> item out of stock / price changed at checkout?</span><span class="zh"><strong>权衡:</strong>AP vs CP;最后写入获胜 vs 版本化并发。<strong>追问:</strong>结账时缺货 / 价格变了怎么办?</span></p>
+    </div>
+
+    <!-- Q06 -->
+    <div class="sumcard" id="q06">
+      <div class="sc-head"><span class="sc-num">6</span><h3>🔎 <span class="en">Search & Catalog</span><span class="zh">搜索与目录</span></h3><a href="06_product_search.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> per-store search with facets, typo tolerance, near-real-time index updates; extreme size skew.</span><span class="zh"><strong>问题:</strong>按店搜索,带分面、纠错、近实时索引更新;店铺规模极度倾斜。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Decouple indexing from writes via CDC/outbox</strong> → Kafka → indexer → search engine (bulk upsert).</span><span class="zh"><strong>用 CDC/outbox 把索引与写入解耦</strong> → Kafka → 索引器 → 搜索引擎(批量 upsert)。</span></li>
+        <li><span class="en"><strong>Shared index + shop routing/filter</strong>; give whale merchants a dedicated index. Don't index-per-tiny-shop.</span><span class="zh"><strong>共享索引 + 按店路由/过滤</strong>;给巨型商家独立索引。别给每个小店都开一个索引。</span></li>
+        <li><span class="en">Near-real-time freshness is a <strong>deliberate eventual-consistency</strong> choice (seconds), acceptable for storefront.</span><span class="zh">近实时新鲜度是<strong>有意为之的最终一致</strong>(秒级),店面可接受。</span></li>
+        <li><span class="en"><strong>Alias-swap</strong> for zero-downtime reindex; relevance = BM25 + business boosts (in-stock, bestsellers).</span><span class="zh">用<strong>别名切换</strong>实现零停机重建索引;相关性 = BM25 + 业务加权(有货、热销)。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> index-per-tenant vs shared; freshness vs cost. <strong>Follow-up:</strong> a just-edited product not showing; reindex with a mapping change?</span><span class="zh"><strong>权衡:</strong>每租户独立索引 vs 共享;新鲜度 vs 成本。<strong>追问:</strong>刚改的商品搜不到;改了 mapping 要重建索引怎么办?</span></p>
+    </div>
+
+    <!-- Q07 -->
+    <div class="sumcard" id="q07">
+      <div class="sc-head"><span class="sc-num">7</span><h3>🔗 <span class="en">Webhook Delivery</span><span class="zh">Webhook 投递</span></h3><a href="07_webhook_delivery.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> deliver order/inventory events to thousands of third-party apps — at-least-once, retries, DLQ.</span><span class="zh"><strong>问题:</strong>把订单/库存事件投递给数千个第三方应用 —— 至少一次、重试、死信队列。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>At-least-once + subscriber idempotency</strong> (dedupe by webhook id) is the honest contract — exactly-once over HTTP is impractical.</span><span class="zh"><strong>至少一次 + 订阅方幂等</strong>(按 webhook id 去重)才是诚实的契约 —— HTTP 上做精确一次不现实。</span></li>
+        <li><span class="en"><strong>Isolate per endpoint</strong> (per-destination queues + circuit breaker) to kill head-of-line blocking from one dead subscriber.</span><span class="zh"><strong>按端点隔离</strong>(每目的地队列 + 熔断器),消除单个挂掉的订阅方造成的队头阻塞。</span></li>
+        <li><span class="en"><strong>Backoff + jitter</strong> retries, capped → <strong>DLQ with replay</strong> from a dashboard.</span><span class="zh"><strong>退避 + 抖动</strong>重试,有上限 → 进 <strong>DLQ,可从面板重放</strong>。</span></li>
+        <li><span class="en">Sign with <strong>HMAC + replay protection</strong>; partition for ordering only where needed; buffer & autoscale for storms with per-tenant fairness.</span><span class="zh">用 <strong>HMAC + 防重放</strong>签名;仅在需要处用分区保序;事件风暴时缓冲 + 自动扩容并保证按租户公平。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> per-endpoint vs shared queue; push vs pull. <strong>Follow-up:</strong> subscriber down for hours; guarantee order.created before order.updated?</span><span class="zh"><strong>权衡:</strong>每端点队列 vs 共享队列;推 vs 拉。<strong>追问:</strong>订阅方宕机数小时;如何保证 order.created 先于 order.updated?</span></p>
+    </div>
+
+    <!-- Q08 -->
+    <div class="sumcard" id="q08">
+      <div class="sc-head"><span class="sc-num">8</span><h3>🚦 <span class="en">Rate Limiting</span><span class="zh">限流</span></h3><a href="08_rate_limiter.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> per-tenant limits for REST + GraphQL (cost-based) — fair, distributed, cheap to check.</span><span class="zh"><strong>问题:</strong>对 REST + GraphQL(按成本)做按租户限流 —— 公平、分布式、检查开销低。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Token / leaky bucket</strong> for smoothing (allows bursts); pick the algorithm consciously (vs fixed/sliding window).</span><span class="zh"><strong>令牌桶 / 漏桶</strong>做平滑(允许突发);有意识地选算法(对比固定/滑动窗口)。</span></li>
+        <li><span class="en"><strong>GraphQL = cost-based</strong>: one query can be arbitrarily expensive, so debit a points bucket by computed query cost.</span><span class="zh"><strong>GraphQL 用按成本</strong>:单个查询可能任意昂贵,因此按计算出的查询成本从点数桶扣减。</span></li>
+        <li><span class="en"><strong>Atomic Lua in centralized Redis</strong>; shard by client to handle the hot key.</span><span class="zh"><strong>集中式 Redis + 原子 Lua</strong>;按客户端分片应对热点 key。</span></li>
+        <li><span class="en">Make the <strong>fail-open vs fail-closed</strong> decision explicit (usually fail-open with a conservative local cap); always return <code>Retry-After</code>.</span><span class="zh">明确<strong>失败放行 vs 失败拒绝</strong>(通常失败放行 + 本地保守上限);始终返回 <code>Retry-After</code>。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> accuracy vs cost; centralized vs local. <strong>Follow-up:</strong> Redis outage — open or closed? estimating GraphQL cost accurately?</span><span class="zh"><strong>权衡:</strong>精确度 vs 开销;集中 vs 本地。<strong>追问:</strong>Redis 挂了 —— 放行还是拒绝?如何准确估算 GraphQL 成本?</span></p>
+    </div>
+
+    <!-- Q09 -->
+    <div class="sumcard" id="q09">
+      <div class="sc-head"><span class="sc-num">9</span><h3>🔔 <span class="en">Notifications</span><span class="zh">通知系统</span></h3><a href="09_notification_system.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> order confirmations & alerts across email/SMS/push — templated, deduped, multi-provider, deliverable at spike.</span><span class="zh"><strong>问题:</strong>跨邮件/短信/推送的订单确认与提醒 —— 模板化、去重、多供应商、尖峰可达。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Async queue absorbs spikes</strong> & decouples producers from providers; the real cap is provider rate limits.</span><span class="zh"><strong>异步队列吸收尖峰</strong>并解耦生产者与供应商;真正的瓶颈是供应商速率上限。</span></li>
+        <li><span class="en"><strong>dedupeKey → effectively-once</strong> (a retried order event must not email twice).</span><span class="zh"><strong>dedupeKey → 实际一次</strong>(重试的订单事件不能发两封邮件)。</span></li>
+        <li><span class="en"><strong>Multi-provider failover</strong> with circuit breakers; reconcile delivery status via provider webhooks.</span><span class="zh"><strong>多供应商故障切换</strong> + 熔断器;通过供应商回调对账投递状态。</span></li>
+        <li><span class="en"><strong>Priority lanes</strong> (transactional &gt; marketing); preferences & compliance (opt-out, quiet hours) are first-class.</span><span class="zh"><strong>优先级队列</strong>(事务类 &gt; 营销类);用户偏好与合规(退订、免打扰时段)是一等公民。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> single vs multi-provider; priority queues vs one queue. <strong>Follow-up:</strong> provider outage; don't send "shipped" before "confirmed"?</span><span class="zh"><strong>权衡:</strong>单 vs 多供应商;优先级队列 vs 单队列。<strong>追问:</strong>供应商宕机;如何避免"已发货"早于"已确认"?</span></p>
+    </div>
+
+    <!-- Q10 -->
+    <div class="sumcard" id="q10">
+      <div class="sc-head"><span class="sc-num">10</span><h3>📊 <span class="en">Real-time Analytics</span><span class="zh">实时分析</span></h3><a href="10_analytics_pipeline.html"><span class="en">full →</span><span class="zh">完整 →</span></a></div>
+      <p><span class="en"><strong>Problem:</strong> live per-store dashboards — ingest the order/pageview firehose, aggregate, serve sub-second queries.</span><span class="zh"><strong>问题:</strong>每店实时看板 —— 摄入订单/浏览的洪流,聚合,提供亚秒级查询。</span></p>
+      <div class="mini">⭐ <span class="en">Must-hit points</span><span class="zh">必讲重点</span></div>
+      <ul class="must">
+        <li><span class="en"><strong>Pick consistency per metric</strong>: exact revenue (exactly-once + idempotent writes) vs approximate unique visitors (HyperLogLog).</span><span class="zh"><strong>按指标选一致性</strong>:精确营收(精确一次 + 幂等写入) vs 近似独立访客(HyperLogLog)。</span></li>
+        <li><span class="en"><strong>Kappa (stream + replay) beats Lambda's dual code paths</strong> for corrections.</span><span class="zh">做纠错时,<strong>Kappa(流 + 重放)优于 Lambda 的双套代码</strong>。</span></li>
+        <li><span class="en"><strong>OLAP columnar store</strong> (ClickHouse/Druid/Pinot) for sub-second multi-tenant group-by; pre-aggregate rollups.</span><span class="zh"><strong>OLAP 列式存储</strong>(ClickHouse/Druid/Pinot)做亚秒级多租户分组聚合;预聚合 rollup。</span></li>
+        <li><span class="en"><strong>Watermarks + grace</strong> for late/out-of-order events; <strong>replay</strong> the log to recompute after a bug; tier hot/cold for cost.</span><span class="zh">用<strong>水位线 + 宽限期</strong>处理迟到/乱序事件;出 bug 后<strong>重放</strong>日志重算;冷热分层控成本。</span></li>
+      </ul>
+      <div class="mini"><span class="en">Core trade-off / Top follow-up</span><span class="zh">核心权衡 / 高频追问</span></div>
+      <p><span class="en"><strong>Trade-off:</strong> exact vs approximate; lambda vs kappa; pre-agg vs query-time. <strong>Follow-up:</strong> a late event updates an already-served window?</span><span class="zh"><strong>权衡:</strong>精确 vs 近似;lambda vs kappa;预聚合 vs 查询时聚合。<strong>追问:</strong>迟到事件要更新已经返回过的时间窗怎么办?</span></p>
+    </div>
+
+    <p style="margin-top:20px;"><a href="index.html">← <span class="en">Back to all questions</span><span class="zh">返回全部题目</span></a></p>
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

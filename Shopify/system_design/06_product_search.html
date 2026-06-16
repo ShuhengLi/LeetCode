@@ -1,0 +1,1153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 · Product Search &amp; Catalog — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 06 · Search &amp; Catalog</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="05_shopping_cart.html"><span class="n">←</span> 05 Cart</a>
+    <a href="07_webhook_delivery.html"><span class="n">→</span> 07 Webhooks</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 2 · Core platform · ★★★★☆</div>
+      <h1><span class="en">Design Product Catalog, Search &amp; Filtering</span><span class="zh">设计商品目录、搜索与筛选系统</span></h1>
+      <p><span class="en">"Every Shopify storefront needs search that <strong>converts: fast, relevant, fresh, and isolated per merchant.</strong>
+      Design per-store product search with full-text, facets, typo tolerance, autocomplete, and near-real-time index updates
+      as merchants edit their catalog — from a 5-product hobby shop to a merchant with 5 million SKUs."</span><span class="zh">"每个 Shopify 店铺都需要<strong>能带来转化的搜索：快速、相关、实时，且按商家隔离。</strong>设计单店商品搜索，支持全文检索、分面筛选、拼写容错、自动补全，以及商家编辑目录时的近实时索引更新——从仅有 5 件商品的兴趣小店，到拥有 500 万 SKU 的大型商家。"</span></p>
+      <div class="meta">
+        <span class="chip"><span class="en">Seen: catalog/search framing</span><span class="zh">考察：目录/搜索场景</span></span>
+        <span class="chip"><span class="en">Tests: indexing pipelines + multi-tenancy</span><span class="zh">考点：索引管道 + 多租户</span></span>
+        <span class="chip">60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question is deceptive</span><span class="zh">为什么这道题具有迷惑性</span></span>
+      <span class="en">It looks like "add Elasticsearch." The real difficulty is the <strong>extreme tenant size skew</strong> (5 products vs 5 million)
+      and the <strong>freshness contract</strong>: merchants expect edits to appear in search results within seconds, not minutes.
+      Both constraints drive every significant architectural decision.</span><span class="zh">表面上看只是"接入 Elasticsearch"。真正的难点在于<strong>极端的租户规模差异</strong>（5 件商品 vs 500 万件）以及<strong>新鲜度契约</strong>：商家期望编辑在数秒内而非数分钟内出现在搜索结果中。这两个约束决定了所有重要的架构决策。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">明确需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">约 7 分钟 · 提问而非假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Full-text query across product title, description, tags, and options.</span><span class="zh">跨商品标题、描述、标签和选项的全文检索。</span></li>
+            <li><span class="en">Faceted filtering: price range, product type, vendor, tags, options (size, color).</span><span class="zh">分面筛选：价格范围、商品类型、供应商、标签、选项（尺码、颜色）。</span></li>
+            <li><span class="en">Sort modes: relevance, price ascending/descending, newest first.</span><span class="zh">排序模式：相关性、价格升/降序、最新优先。</span></li>
+            <li><span class="en">Autocomplete / search suggestions as the buyer types.</span><span class="zh">买家输入时的自动补全 / 搜索建议。</span></li>
+            <li><span class="en">Typo tolerance and merchant-configured synonym dictionaries.</span><span class="zh">拼写容错与商家自定义同义词词典。</span></li>
+            <li><span class="en">Pagination / cursor-based navigation through result sets.</span><span class="zh">基于游标的分页 / 结果集翻页。</span></li>
+            <li><strong><span class="en">Per-shop scoping</span><span class="zh">按店铺隔离</span></strong><span class="en"> — results are always isolated to one storefront.</span><span class="zh"> — 结果始终限定在单个店铺内。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><strong><span class="en">Query latency</span><span class="zh">查询延迟</span></strong><span class="en"> &lt; 100 ms at p99 (including facet aggregations).</span><span class="zh"> p99 低于 100 ms（含分面聚合）。</span></li>
+            <li><strong><span class="en">Freshness</span><span class="zh">新鲜度</span></strong><span class="en"> — product edits visible in search within seconds (near-real-time).</span><span class="zh"> — 商品编辑在数秒内出现在搜索结果中（近实时）。</span></li>
+            <li><span class="en">High read QPS: millions of storefronts, each with their own buyers.</span><span class="zh">高读取 QPS：数百万个店铺，每个都有独立买家群体。</span></li>
+            <li><strong><span class="en">Multi-tenant isolation</span><span class="zh">多租户隔离</span></strong><span class="en"> — a noisy large merchant must not degrade tiny shops.</span><span class="zh"> — 高噪声大型商家不得影响小店铺的性能。</span></li>
+            <li><span class="en">Relevance quality: search must rank in-stock, high-converting items above stale ones.</span><span class="zh">相关性质量：搜索须将有库存、高转化率的商品排在过时商品之上。</span></li>
+            <li><span class="en">Cost efficiency at tail: millions of shops that run few searches should not be expensive to host.</span><span class="zh">长尾成本效率：数百万搜索量极少的店铺不应带来高昂的托管成本。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to ask out loud</span><span class="zh">大声提出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Per-shop only, or also cross-shop marketplace search? <em>(Assume per-shop; cross-shop is a follow-up.)</em></span><span class="zh">仅限单店铺，还是也支持跨店铺的市场搜索？<em>（假设为单店铺；跨店铺作为后续扩展。）</em></span></li>
+          <li><span class="en">What is the freshness SLA — seconds, minutes, or eventually consistent? <em>(Drives CDC vs batch.)</em></span><span class="zh">新鲜度 SLA 是什么——秒级、分钟级，还是最终一致？<em>（决定 CDC 还是批处理方案。）</em></span></li>
+          <li><span class="en">Do we need personalized / ML ranking, or BM25 + business boosts for now?</span><span class="zh">当前是否需要个性化 / ML 排序，还是 BM25 + 业务加权即可？</span></li>
+          <li><span class="en">Autocomplete required at launch? It has its own index structure (edge n-grams or completion suggester).</span><span class="zh">上线时是否需要自动补全？它有独立的索引结构（edge n-gram 或 completion suggester）。</span></li>
+          <li><span class="en">Which languages / locales? Tokenization is language-specific; a single analyzer won't serve Japanese and English equally.</span><span class="zh">支持哪些语言 / 地区？分词是语言相关的；单一分析器无法同等支持日语和英语。</span></li>
+          <li><span class="en">Catalog size extremes: what is the p99 shop size and the absolute largest merchant?</span><span class="zh">目录规模的极端情况：p99 店铺规模及最大商家的绝对体量是多少？</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找出真正的瓶颈</span></span></div>
+      <p><span class="en">The two axes that dominate sizing: <strong>total index volume</strong> (drives cluster storage and segment cost) and
+      <strong>index mutation rate</strong> (drives CDC pipeline throughput and indexer concurrency). Query QPS is high but
+      served cheaply by the search cluster's inverted index.</span><span class="zh">决定容量规模的两个维度：<strong>索引总量</strong>（决定集群存储与段成本）和<strong>索引变更速率</strong>（决定 CDC 管道吞吐量和 Indexer 并发度）。查询 QPS 虽高，但搜索集群的倒排索引可以低成本承载。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">~5B</div><div class="l">total products across platform</div></div>
+        <div class="kpi"><div class="v">~500k</div><div class="l">search QPS peak (all shops)</div></div>
+        <div class="kpi"><div class="v">~50k</div><div class="l">index write events/sec (catalog edits + inventory)</div></div>
+        <div class="kpi"><div class="v">5 → 5M</div><div class="l">products per shop (extreme skew)</div></div>
+      </div>
+      <ul>
+        <li><strong><span class="en">Index size</span><span class="zh">索引大小</span></strong><span class="en">: 5B products × ~2 KB per denormalized document = ~10 TB raw; compressed and with replicas, plan for 30–50 TB of search cluster storage.</span><span class="zh">：50 亿商品 × 每个反规范化文档约 2 KB = 约 10 TB 原始数据；压缩后加副本，规划搜索集群存储 30–50 TB。</span></li>
+        <li><strong><span class="en">Query load</span><span class="zh">查询负载</span></strong><span class="en">: 500k QPS × ~5 ms compute per query = ~2,500 vCPU-equivalents in the search cluster. Cache hit rate on hot-query strings (top-10 queries per shop) dramatically reduces this in practice.</span><span class="zh">：50 万 QPS × 每次查询约 5 ms 计算 = 搜索集群约 2,500 个 vCPU 当量。热门查询字符串（每店铺 top-10 查询）的缓存命中率在实践中会大幅降低实际消耗。</span></li>
+        <li><strong><span class="en">Mutation throughput</span><span class="zh">变更吞吐量</span></strong><span class="en">: Kafka topic needs to sustain 50k events/sec. Indexer fleet processes these in micro-batches; Elasticsearch bulk API handles ~5k docs/sec per node at reasonable shard counts.</span><span class="zh">：Kafka topic 需要承载 5 万事件/秒。Indexer 集群以微批方式处理；在合理分片数下，Elasticsearch bulk API 每节点可处理约 5,000 文档/秒。</span></li>
+        <li><strong><span class="en">Skew insight</span><span class="zh">倾斜洞察</span></strong><span class="en">: 99% of shops have fewer than 1,000 products. One whale merchant (5M products) requires ~10 GB of index alone and its reindex takes hours — it needs dedicated shard routing.</span><span class="zh">：99% 的店铺商品数少于 1,000 件。一个巨型商家（500 万件商品）仅索引就需约 10 GB，重建索引耗时数小时——需要专用分片路由。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">The bottleneck is <em>not</em> query serving — it is the <strong>freshness contract for the mutation pipeline</strong>.
+        Achieving seconds-level freshness at 50k events/sec with durable ordering requires a real CDC/Kafka pipeline, not
+        polling or synchronous indexing on the write path.</span><span class="zh">瓶颈<em>不在于</em>查询服务——而在于<strong>变更管道的新鲜度契约</strong>。在 5 万事件/秒下实现秒级新鲜度并保证有序持久化，需要真正的 CDC/Kafka 管道，而非轮询或写入路径上的同步索引。</span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row">
+          <span class="method get">GET</span>
+          <span class="path">/search?shop={shop_id}&amp;q={query}&amp;filters={json}&amp;sort={field}&amp;page={cursor}&amp;limit={n}</span>
+          <span class="desc">Returns results + facet counts</span>
+        </div>
+        <div class="row">
+          <span class="method get">GET</span>
+          <span class="path">/autocomplete?shop={shop_id}&amp;q={prefix}&amp;limit={n}</span>
+          <span class="desc">Returns prefix suggestions + product titles</span>
+        </div>
+        <div class="row">
+          <span class="method post">POST</span>
+          <span class="path">/internal/index/product</span>
+          <span class="desc">Indexer consumer endpoint — upsert a denormalized product doc</span>
+        </div>
+        <div class="row">
+          <span class="method del">DEL</span>
+          <span class="path">/internal/index/product/{product_id}</span>
+          <span class="desc">Indexer consumer endpoint — remove a deleted/archived product</span>
+        </div>
+      </div>
+      <p><span class="en">The <code>filters</code> parameter is a structured JSON object: <code>{"price":{"min":10,"max":100},"vendor":["Nike"],"tags":["sale"]}</code>.
+      The <code>sort</code> parameter accepts <code>relevance</code>, <code>price_asc</code>, <code>price_desc</code>, or <code>created_desc</code>.
+      Pagination uses a <strong>cursor</strong> (opaque base64 of search_after values) rather than offset, which degrades badly
+      at depth in Elasticsearch.</span><span class="zh"><code>filters</code> 参数为结构化 JSON 对象：<code>{"price":{"min":10,"max":100},"vendor":["Nike"],"tags":["sale"]}</code>。<code>sort</code> 参数接受 <code>relevance</code>、<code>price_asc</code>、<code>price_desc</code> 或 <code>created_desc</code>。分页使用<strong>游标</strong>（search_after 值的不透明 base64 编码）而非偏移量——后者在 Elasticsearch 中深翻页时性能急剧劣化。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+
+      <h4><span class="en">Source of truth — sharded MySQL (one shard-set per shop cluster)</span><span class="zh">数据来源 — 分片 MySQL（每个店铺集群一组分片）</span></h4>
+      <pre><code><span class="k">product</span>         (product_id PK, shop_id, title, body_html, vendor, product_type,
+                  status ENUM(active,archived,draft), created_at, updated_at)
+
+<span class="k">variant</span>         (variant_id PK, product_id FK, price, compare_at_price,
+                  inventory_quantity, sku, barcode, updated_at)
+
+<span class="k">product_option</span>  (option_id PK, product_id FK, name, position)
+<span class="k">option_value</span>    (value_id PK, option_id FK, value)
+
+<span class="k">product_tag</span>     (product_id FK, tag)
+<span class="k">collection_product</span>(collection_id FK, product_id FK)   <span class="c">-- M:N</span>
+
+<span class="c">-- Indexes: (shop_id, updated_at) on product and variant for CDC range scans</span></code></pre>
+
+      <h4><span class="en">Search index — Elasticsearch / OpenSearch: denormalized product document</span><span class="zh">搜索索引 — Elasticsearch / OpenSearch：反规范化商品文档</span></h4>
+      <pre><code><span class="c">// One document per product, routing key = shop_id</span>
+{
+  <span class="s">"product_id"</span>:      <span class="s">"gid://shopify/Product/123"</span>,
+  <span class="s">"shop_id"</span>:         <span class="s">"myshop.myshopify.com"</span>,       <span class="c">// routing + mandatory filter</span>
+  <span class="s">"title"</span>:           <span class="s">"Classic Running Shoe"</span>,         <span class="c">// analyzed: tokenized, stemmed</span>
+  <span class="s">"body_text"</span>:       <span class="s">"Lightweight mesh upper…"</span>,     <span class="c">// analyzed</span>
+  <span class="s">"vendor"</span>:          <span class="s">"Nike"</span>,                          <span class="c">// keyword (exact + facet)</span>
+  <span class="s">"product_type"</span>:    <span class="s">"Footwear"</span>,                      <span class="c">// keyword</span>
+  <span class="s">"tags"</span>:            [<span class="s">"sale"</span>, <span class="s">"running"</span>],             <span class="c">// keyword array</span>
+  <span class="s">"option_names"</span>:    [<span class="s">"Size"</span>, <span class="s">"Color"</span>],
+  <span class="s">"option_values"</span>:   [<span class="s">"9"</span>, <span class="s">"10"</span>, <span class="s">"Black"</span>, <span class="s">"White"</span>],  <span class="c">// facet</span>
+  <span class="s">"min_price"</span>:       <span class="n">89.99</span>,                           <span class="c">// numeric range facet</span>
+  <span class="s">"max_price"</span>:       <span class="n">129.99</span>,
+  <span class="s">"has_inventory"</span>:   <span class="k">true</span>,                            <span class="c">// boolean filter; denormalized from variants</span>
+  <span class="s">"collections"</span>:     [<span class="s">"gid://shopify/Collection/55"</span>],
+  <span class="s">"status"</span>:          <span class="s">"active"</span>,
+  <span class="s">"created_at"</span>:      <span class="s">"2024-03-15T10:00:00Z"</span>,
+  <span class="s">"updated_at"</span>:      <span class="s">"2025-06-10T14:22:00Z"</span>,
+  <span class="s">"boost_score"</span>:     <span class="n">0.87</span>                            <span class="c">// merchant-configured or ML-derived boost</span>
+}</code></pre>
+      <p><span class="en">The document is <strong>fully denormalized</strong>: variants, options, inventory flags, and collections are all flattened in.
+      This avoids joins at query time and keeps every field available for faceting and filtering with zero additional I/O.</span><span class="zh">文档是<strong>完全反规范化</strong>的：变体、选项、库存标志和系列均已内联展平。这避免了查询时的关联操作，使每个字段都可直接用于分面和筛选，无需额外 I/O。</span></p>
+    </section>
+
+    <!-- 5 ARCH -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">write/indexing path + read/query path</span><span class="zh">写入/索引路径 + 读取/查询路径</span></span></div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 820 600" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+            <marker id="ahb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#2563eb"/>
+            </marker>
+          </defs>
+
+          <!-- ====== WRITE / INDEXING PATH (left column) ====== -->
+          <!-- Merchant -->
+          <g>
+            <rect x="30" y="20" width="170" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="115" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Merchant Admin</text>
+            <text x="115" y="57" text-anchor="middle" font-size="10.5" fill="#64748b">edit product / inventory</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="115" y1="68" x2="115" y2="104" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- Catalog Service -->
+          <g>
+            <rect x="30" y="104" width="170" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="115" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Catalog Service</text>
+            <text x="115" y="142" text-anchor="middle" font-size="10.5" fill="#008060">writes MySQL + outbox</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="115" y1="154" x2="115" y2="190" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- MySQL -->
+          <g>
+            <rect x="30" y="190" width="170" height="50" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="115" y="211" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">MySQL (sharded)</text>
+            <text x="115" y="228" text-anchor="middle" font-size="10.5" fill="#7c3aed">product SoT + outbox table</text>
+          </g>
+          <!-- arrow down (CDC) -->
+          <line x1="115" y1="240" x2="115" y2="276" stroke="#ea580c" stroke-width="1.6" stroke-dasharray="5 3" fill="none" marker-end="url(#ahd)"/>
+          <text x="125" y="261" font-size="9.5" fill="#ea580c">CDC</text>
+          <!-- Debezium / outbox -->
+          <g>
+            <rect x="30" y="276" width="170" height="50" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="115" y="298" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Debezium / Outbox</text>
+            <text x="115" y="314" text-anchor="middle" font-size="10.5" fill="#ea580c">captures row-level changes</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="115" y1="326" x2="115" y2="362" stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ahd)"/>
+          <!-- Kafka -->
+          <g>
+            <rect x="30" y="362" width="170" height="50" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+            <text x="115" y="384" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka</text>
+            <text x="115" y="400" text-anchor="middle" font-size="10.5" fill="#ea580c">catalog.product.changes</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="115" y1="412" x2="115" y2="448" stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ahd)"/>
+          <!-- Indexer -->
+          <g>
+            <rect x="30" y="448" width="170" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="115" y="469" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Indexer Fleet</text>
+            <text x="115" y="486" text-anchor="middle" font-size="10.5" fill="#008060">transform · denormalize · bulk upsert</text>
+          </g>
+          <!-- arrow right to search index -->
+          <line x1="200" y1="473" x2="292" y2="473" stroke="#ea580c" stroke-width="1.6" fill="none" marker-end="url(#ahd)"/>
+
+          <!-- ====== SEARCH INDEX (center) ====== -->
+          <g>
+            <rect x="292" y="440" width="240" height="64" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="412" y="464" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Search Cluster</text>
+            <text x="412" y="480" text-anchor="middle" font-size="10.5" fill="#7c3aed">Elasticsearch / OpenSearch</text>
+            <text x="412" y="495" text-anchor="middle" font-size="10" fill="#9333ea">shop-routed shards · indices + aliases</text>
+          </g>
+
+          <!-- ====== READ / QUERY PATH (right column) ====== -->
+          <!-- Buyer -->
+          <g>
+            <rect x="600" y="20" width="180" height="48" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+            <text x="690" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Buyer (Storefront)</text>
+            <text x="690" y="57" text-anchor="middle" font-size="10.5" fill="#64748b">search · filter · autocomplete</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="690" y1="68" x2="690" y2="104" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ahb)"/>
+          <!-- CDN -->
+          <g>
+            <rect x="600" y="104" width="180" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="690" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">CDN / Edge Cache</text>
+            <text x="690" y="142" text-anchor="middle" font-size="10.5" fill="#2563eb">cache hot query responses ~1s TTL</text>
+          </g>
+          <!-- arrow down -->
+          <line x1="690" y1="154" x2="690" y2="190" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ahb)"/>
+          <!-- Search Service -->
+          <g>
+            <rect x="600" y="190" width="180" height="50" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+            <text x="690" y="211" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Search Service</text>
+            <text x="690" y="228" text-anchor="middle" font-size="10.5" fill="#008060">query builder · facet aggregation</text>
+          </g>
+          <!-- arrow down to query cache -->
+          <line x1="690" y1="240" x2="690" y2="276" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ahb)"/>
+          <!-- Redis hot cache -->
+          <g>
+            <rect x="600" y="276" width="180" height="50" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+            <text x="690" y="298" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis Query Cache</text>
+            <text x="690" y="314" text-anchor="middle" font-size="10.5" fill="#dc2626">top queries per shop · ~5s TTL</text>
+          </g>
+          <!-- arrow from redis to search cluster (miss path) -->
+          <line x1="690" y1="326" x2="690" y2="362" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5 3" fill="none" marker-end="url(#ah)"/>
+          <text x="702" y="347" font-size="9.5" fill="#dc2626">miss</text>
+          <!-- search service to search cluster (direct) -->
+          <line x1="600" y1="312" x2="534" y2="472" stroke="#2563eb" stroke-width="1.6" fill="none" marker-end="url(#ahb)"/>
+
+          <!-- dummy node to hold cache→cluster line bottom anchor -->
+          <g>
+            <rect x="600" y="362" width="180" height="50" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="690" y="383" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">Result Merge</text>
+            <text x="690" y="399" text-anchor="middle" font-size="10.5" fill="#2563eb">search hits + facet counts + boost</text>
+          </g>
+          <!-- search cluster to result merge -->
+          <line x1="532" y1="455" x2="600" y2="385" stroke="#7c3aed" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+
+          <!-- section labels -->
+          <text x="115" y="13" text-anchor="middle" font-size="11" font-weight="700" fill="#ea580c">WRITE / INDEXING PATH</text>
+          <text x="690" y="13" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">READ / QUERY PATH</text>
+        </svg>
+
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client</span>
+          <span><i style="background:#2563eb"></i> edge / query</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> CDC / async pipeline</span>
+        </div>
+        <div class="cap"><span class="en">Left: write/indexing path — MySQL outbox → Debezium → Kafka → Indexer → Search Cluster.
+        Right: read/query path — Buyer → CDN → Search Service → Redis cache (hit) or Search Cluster (miss) → Result Merge.</span><span class="zh">左侧：写入/索引路径 — MySQL outbox → Debezium → Kafka → Indexer → Search Cluster。右侧：读取/查询路径 — 买家 → CDN → Search Service → Redis 缓存（命中）或 Search Cluster（未命中）→ 结果合并。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件详解</span></h4>
+      <ul>
+        <li><strong>Catalog Service</strong><span class="en"> — writes product mutations to MySQL and an outbox table atomically (same transaction). Synchronous indexing is intentionally <em>not</em> on this path; it would couple write latency to search cluster health.</span><span class="zh"> — 以原子方式（同一事务）将商品变更写入 MySQL 和 outbox 表。刻意<em>不在</em>此路径上进行同步索引，否则会将写入延迟与搜索集群健康状态耦合。</span></li>
+        <li><strong>Debezium / outbox relay</strong><span class="en"> — reads the MySQL binlog (or polls the outbox table) and publishes change events to Kafka. Decouples the write path completely from the indexing pipeline.</span><span class="zh"> — 读取 MySQL binlog（或轮询 outbox 表）并将变更事件发布到 Kafka，将写入路径与索引管道完全解耦。</span></li>
+        <li><strong>Kafka</strong><span class="en"> — durable, ordered event buffer. Partitioned by <code>shop_id</code> so all events for one shop arrive in order, preventing a later event from overwriting a newer document.</span><span class="zh"> — 持久有序的事件缓冲区。按 <code>shop_id</code> 分区，确保同一店铺的所有事件按序到达，防止旧事件覆盖更新的文档。</span></li>
+        <li><strong>Indexer Fleet</strong><span class="en"> — stateless consumers. Fetch full denormalized documents (joining variants, options, collections), then bulk-upsert into the search cluster. Scales independently of the write and query paths.</span><span class="zh"> — 无状态消费者。获取完整的反规范化文档（关联变体、选项、系列），然后批量 upsert 到搜索集群。可独立于写入和查询路径进行扩缩容。</span></li>
+        <li><strong>Search Cluster</strong><span class="en"> — Elasticsearch or OpenSearch. Queries arrive with <code>_routing=shop_id</code> so they hit the right shard(s) directly rather than scatter-gathering across the whole cluster.</span><span class="zh"> — Elasticsearch 或 OpenSearch。查询携带 <code>_routing=shop_id</code>，直接命中对应分片，避免在整个集群上进行 scatter-gather。</span></li>
+        <li><strong>Search Service</strong><span class="en"> — translates the API query into a search DSL query + aggregations, handles relevance boosting, applies shop-level synonym and pinning configuration, then merges facet counts with hits.</span><span class="zh"> — 将 API 查询转换为搜索 DSL 查询 + 聚合，处理相关性加权，应用店铺级同义词和置顶配置，然后将分面计数与命中结果合并。</span></li>
+        <li><strong>Redis Query Cache</strong><span class="en"> — caches the top query responses per shop for a short TTL (~5 s). Absorbs burst traffic on popular storefront pages without hitting the search cluster per request.</span><span class="zh"> — 以短 TTL（约 5 秒）缓存每个店铺的热门查询响应，吸收热门店铺页面的突发流量，无需每次请求都打到搜索集群。</span></li>
+        <li><strong>CDN / Edge Cache</strong><span class="en"> — caches search response payloads for frequently repeated queries (e.g., browse-page results with no free-text query). Effective for collection browsing; less so for unique user queries.</span><span class="zh"> — 缓存频繁重复查询的搜索响应内容（如无自由文本查询的浏览页结果）。对系列浏览有效；对唯一用户查询效果较弱。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度分析</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在之处</span></span></div>
+
+      <h3><span class="en">① Why a search engine, not SQL LIKE</span><span class="zh">① 为什么用搜索引擎而非 SQL LIKE</span></h3>
+      <p><span class="en">A naive <code>WHERE title LIKE '%running shoe%'</code> performs a full table scan on every query — no index can help a leading wildcard.
+      It cannot rank results (no scoring function), does not handle typos, and produces no facet counts without expensive sub-queries.
+      An inverted index maps each analyzed term to the list of documents containing it; a query against even a billion products is a
+      <strong>set intersection plus a BM25 scoring sort</strong>, completing in milliseconds.</span><span class="zh">简单的 <code>WHERE title LIKE '%running shoe%'</code> 每次查询都要全表扫描——前缀通配符无法利用任何索引。它无法对结果排序（没有评分函数），无法处理拼写错误，且不经高代价子查询无法产生分面计数。倒排索引将每个分析后的词项映射到包含它的文档列表；即使对十亿件商品的查询，也只是<strong>集合求交加 BM25 评分排序</strong>，毫秒级完成。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Capability</span><span class="zh">能力</span></th><th>SQL LIKE</th><th><span class="en">Search Engine (ES/OpenSearch)</span><span class="zh">搜索引擎（ES/OpenSearch）</span></th></tr></thead>
+        <tbody>
+          <tr><td><span class="en">Full-text relevance ranking</span><span class="zh">全文相关性排序</span></td><td><span class="en">None — order arbitrary</span><span class="zh">无——顺序任意</span></td><td><span class="en">BM25 / TF-IDF; field-weight boosts</span><span class="zh">BM25 / TF-IDF；字段权重加成</span></td></tr>
+          <tr><td><span class="en">Query throughput at 5B docs</span><span class="zh">50 亿文档下的查询吞吐</span></td><td><span class="en">Full scan O(N)</span><span class="zh">全表扫描 O(N)</span></td><td><span class="en">Inverted index O(hits) ≈ ms</span><span class="zh">倒排索引 O(hits) ≈ 毫秒</span></td></tr>
+          <tr><td><span class="en">Facet counts</span><span class="zh">分面计数</span></td><td><span class="en">N expensive GROUP BY sub-queries</span><span class="zh">N 个高代价 GROUP BY 子查询</span></td><td><span class="en">Single aggregation pass over result set</span><span class="zh">对结果集单次聚合扫描</span></td></tr>
+          <tr><td><span class="en">Typo tolerance</span><span class="zh">拼写容错</span></td><td><span class="en">None</span><span class="zh">无</span></td><td><span class="en">Fuzzy matching (edit distance), analyzers</span><span class="zh">模糊匹配（编辑距离）、分析器</span></td></tr>
+          <tr><td><span class="en">Synonyms</span><span class="zh">同义词</span></td><td><span class="en">Manual OR clauses per synonym</span><span class="zh">每个同义词手动添加 OR 子句</span></td><td><span class="en">Synonym filter in the analysis chain</span><span class="zh">分析链中的同义词过滤器</span></td></tr>
+        </tbody>
+      </table>
+
+      <h3><span class="en">② Indexing pipeline and freshness</span><span class="zh">② 索引管道与新鲜度</span></h3>
+      <p><span class="en">The CDC/outbox pattern decouples the write path from the indexing path: merchants see immediate confirmation of their save,
+      while the index update propagates asynchronously. The pipeline provides <strong>seconds-level freshness</strong> under normal load
+      because Kafka lag on a healthy cluster is typically under one second.</span><span class="zh">CDC/outbox 模式将写入路径与索引路径解耦：商家保存操作可立即得到确认，索引更新则异步传播。在正常负载下，健康集群的 Kafka 滞后通常低于一秒，因此管道可提供<strong>秒级新鲜度</strong>。</span></p>
+      <p><span class="en">Key design points for the indexer:</span><span class="zh">Indexer 的关键设计要点：</span></p>
+      <ul>
+        <li><strong><span class="en">Ordered delivery per shop</span><span class="zh">按店铺有序投递</span></strong><span class="en">: Kafka partitioning by <code>shop_id</code> ensures events for a product arrive in sequence. An out-of-order update could overwrite a newer document with an older one.</span><span class="zh">：Kafka 按 <code>shop_id</code> 分区，确保商品事件按序到达。乱序更新可能用旧文档覆盖更新的文档。</span></li>
+        <li><strong><span class="en">Denormalize at index time</span><span class="zh">索引时反规范化</span></strong><span class="en">: the indexer fetches variants and collections from MySQL (or a read replica) to build the full document. This is heavier than streaming just the changed row but keeps the search document complete.</span><span class="zh">：Indexer 从 MySQL（或只读副本）获取变体和系列以构建完整文档。虽比仅流式传输变更行代价更高，但能保持搜索文档完整。</span></li>
+        <li><strong><span class="en">Bulk upsert</span><span class="zh">批量 upsert</span></strong><span class="en">: Elasticsearch's <code>_bulk</code> API amortizes HTTP overhead; the indexer micro-batches events for ~200 ms before flushing.</span><span class="zh">：Elasticsearch 的 <code>_bulk</code> API 摊销 HTTP 开销；Indexer 将事件微批累积约 200 ms 后再刷写。</span></li>
+        <li><strong><span class="en">Deletes and archiving</span><span class="zh">删除与归档</span></strong><span class="en">: when a product is deleted or set to <code>draft</code>, the indexer issues a delete by document ID. The index filter on <code>status=active</code> also handles it as a query-time filter, providing defense in depth.</span><span class="zh">：商品被删除或设为 <code>draft</code> 时，Indexer 按文档 ID 发出删除请求。<code>status=active</code> 的索引过滤器也作为查询时过滤器处理此情况，提供纵深防御。</span></li>
+      </ul>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Index lag is an intentional eventual-consistency trade-off</span><span class="zh">索引滞后是有意为之的最终一致性权衡</span></span>
+        <span class="en">A product the merchant just saved may not appear in search results for 2–5 seconds. This is acceptable for storefront search —
+        buyers are unlikely to search for a product in the same second the merchant publishes it. If the SLA were stricter (sub-second),
+        you would need synchronous dual-write to the search cluster, which couples write availability to the search cluster's health —
+        a bad trade-off for most shops.</span><span class="zh">商家刚保存的商品可能在 2–5 秒内不会出现在搜索结果中。对于店铺搜索而言这是可接受的——买家不太可能在商家发布商品的同一秒就搜索它。若 SLA 更严格（亚秒级），则需要对搜索集群进行同步双写，这会将写入可用性与搜索集群健康状态耦合——对大多数店铺而言是不划算的权衡。</span>
+      </div>
+
+      <h3><span class="en">③ Multi-tenancy and size skew</span><span class="zh">③ 多租户与规模倾斜</span></h3>
+      <p><span class="en">Two indexing topologies exist, each with different cost profiles:</span><span class="zh">存在两种索引拓扑，各有不同的成本特征：</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Topology</span><span class="zh">拓扑</span></th><th><span class="en">Pros</span><span class="zh">优点</span></th><th><span class="en">Cons</span><span class="zh">缺点</span></th><th><span class="en">When to use</span><span class="zh">适用场景</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Index-per-shop</span><span class="zh">每店铺独立索引</span></td>
+            <td><span class="en">Total isolation; independent reindex; per-shop settings (analyzers, synonyms)</span><span class="zh">完全隔离；独立重建索引；每店铺独立配置（分析器、同义词）</span></td>
+            <td><span class="en">Millions of tiny indices → JVM metaspace explosion, shard count limits (~10k per cluster), heavy overhead for 5-product shops</span><span class="zh">数百万个小索引 → JVM 元空间爆炸，分片数上限（约每集群 1 万），5 件商品的店铺开销极高</span></td>
+            <td><span class="en">Only viable for very large tenants; never for all shops</span><span class="zh">仅适用于超大租户；绝不适用于所有店铺</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Shared index + <code>shop_id</code> routing/filter</span><span class="zh">共享索引 + <code>shop_id</code> 路由/过滤</span></td>
+            <td><span class="en">One index; shard count stays manageable; tiny shops free-ride on shared resources</span><span class="zh">单一索引；分片数可控；小店铺可搭乘共享资源的便车</span></td>
+            <td><span class="en">Noisy-neighbor risk; a large shop's heavy aggregations can affect co-resident shops; mixed shard skew</span><span class="zh">嘈杂邻居风险；大店铺的重聚合可能影响同分片的其他店铺；分片数据倾斜</span></td>
+            <td><span class="en">Default for the long tail of small/medium shops</span><span class="zh">中小店铺长尾的默认选择</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Hybrid: shared + dedicated for whales</span><span class="zh">混合：共享 + 巨型商家专属</span></td>
+            <td><span class="en">Whale merchants get isolation; the 99% long tail stays cheap</span><span class="zh">巨型商家获得隔离；99% 长尾保持低成本</span></td>
+            <td><span class="en">Routing logic needs to know which shops are in shared vs dedicated; adds operational complexity</span><span class="zh">路由逻辑需区分共享与专属店铺；增加运维复杂度</span></td>
+            <td><span class="en">Recommended: trigger on catalog size &gt; ~500k products</span><span class="zh">推荐：目录规模超过约 50 万件商品时触发</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><span class="en">With the shared index, all queries <strong>must</strong> include <code>?routing=shop_id</code> to target only the relevant shard(s),
+      plus a mandatory <code>term</code> filter on <code>shop_id</code> to prevent cross-tenant data leakage.</span><span class="zh">使用共享索引时，所有查询<strong>必须</strong>携带 <code>?routing=shop_id</code> 以仅命中相关分片，并附加 <code>shop_id</code> 的强制 <code>term</code> 过滤器，防止跨租户数据泄露。</span></p>
+
+      <h3><span class="en">④ Faceting and filtering</span><span class="zh">④ 分面与筛选</span></h3>
+      <p><span class="en">Faceted search returns not just the matching products but also <strong>the count of matches per facet value</strong>
+      (e.g., "Nike (42), Adidas (17)"). In Elasticsearch this is a single request: a query combined with <em>aggregations</em>.
+      The aggregations run over the post-filter result set and produce bucket counts.</span><span class="zh">分面搜索不仅返回匹配的商品，还返回<strong>每个分面值的匹配数量</strong>（如"Nike (42), Adidas (17)"）。在 Elasticsearch 中，这是单次请求：查询与<em>聚合</em>组合。聚合在后过滤结果集上运行并生成桶计数。</span></p>
+      <p><span class="en">Performance concerns with faceting:</span><span class="zh">分面的性能注意事项：</span></p>
+      <ul>
+        <li><strong><span class="en">High-cardinality facets</span><span class="zh">高基数分面</span></strong><span class="en"> (e.g., unique price values, free-form tags) produce expensive <code>terms</code> aggregations.
+        Mitigate by capping the result at top-N values, or by using <code>numeric_range</code> aggregation for price buckets.</span><span class="zh">（如唯一价格值、自由格式标签）会产生高代价的 <code>terms</code> 聚合。可通过限制结果为 top-N 值，或对价格区间使用 <code>numeric_range</code> 聚合来缓解。</span></li>
+        <li><strong><span class="en">Global facets vs. post-filter facets</span><span class="zh">全局分面 vs. 后过滤分面</span></strong><span class="en">: when a user selects a facet value (e.g., "Vendor: Nike"), you typically
+        want the other facet counts to reflect the full query without the vendor filter, so the buyer can see how many Adidas items also match.
+        Elasticsearch's <code>global</code> aggregation or post-filter pattern handles this.</span><span class="zh">：当用户选择一个分面值（如"供应商：Nike"）时，通常希望其他分面计数反映不带供应商过滤器的完整查询，以便买家看到有多少 Adidas 商品也匹配。Elasticsearch 的 <code>global</code> 聚合或 post-filter 模式可处理此情况。</span></li>
+        <li><strong><span class="en">Caching facet counts</span><span class="zh">缓存分面计数</span></strong><span class="en">: the filter cache in Elasticsearch automatically caches frequent filter terms.
+        Hot shops with repeated browse queries benefit heavily.</span><span class="zh">：Elasticsearch 的过滤器缓存会自动缓存高频过滤词项。频繁浏览查询的热门店铺可大幅受益。</span></li>
+      </ul>
+
+      <h3><span class="en">⑤ Typo tolerance, synonyms, and autocomplete</span><span class="zh">⑤ 拼写容错、同义词与自动补全</span></h3>
+      <p><strong><span class="en">Typo tolerance</span><span class="zh">拼写容错</span></strong><span class="en"> is implemented via <em>fuzzy matching</em>: <code>match</code> queries with
+      <code>fuzziness: AUTO</code> allow edit distance 1 for 5–8 character terms and 2 for longer terms. Phonetic analyzers
+      (metaphone) catch "Nikey" → "Nike"-style errors. Fuzzy matching adds query overhead; limit to the primary title/body fields.</span><span class="zh">通过<em>模糊匹配</em>实现：带 <code>fuzziness: AUTO</code> 的 <code>match</code> 查询对 5–8 字符词项允许编辑距离 1，更长词项允许距离 2。语音分析器（metaphone）能捕获"Nikey"→"Nike"类错误。模糊匹配会增加查询开销；应限制在主要的标题/正文字段上。</span></p>
+      <p><strong><span class="en">Synonyms</span><span class="zh">同义词</span></strong><span class="en"> are configured at index time (synonym filter in the analysis chain) or at query time (synonym_graph).
+      Query-time synonyms are preferred: they allow merchants to update synonym dictionaries without a full reindex, which is critical
+      for seasonal or domain-specific vocabularies. Synonym dictionaries are stored per-shop in a configuration store and injected into
+      the search request dynamically.</span><span class="zh">可在索引时配置（分析链中的同义词过滤器）或在查询时配置（synonym_graph）。推荐查询时同义词：允许商家无需全量重建索引即可更新词典，对季节性或行业特定词汇至关重要。同义词词典按店铺存储在配置中心，动态注入搜索请求。</span></p>
+      <p><strong><span class="en">Autocomplete</span><span class="zh">自动补全</span></strong><span class="en"> uses a separate sub-field with an <code>edge_ngram</code> analyzer (min gram 2, max gram 15)
+      indexed at write time. Prefix completion queries run against this field and are very fast. Alternatively, the
+      <code>completion</code> suggester in Elasticsearch provides a dedicated finite-state transducer index for sub-millisecond
+      prefix lookups, but it requires a separate field and indexing path.</span><span class="zh">使用带 <code>edge_ngram</code> 分析器（最小 gram 2，最大 gram 15）的独立子字段，在写入时索引。前缀补全查询针对该字段运行，速度极快。另一种选择是 Elasticsearch 的 <code>completion</code> suggester，提供专用的有限状态转换器索引，实现亚毫秒级前缀查找，但需要独立字段和索引路径。</span></p>
+
+      <h3><span class="en">⑥ Relevance tuning and zero-downtime reindex</span><span class="zh">⑥ 相关性调优与零停机重建索引</span></h3>
+      <p><strong><span class="en">Relevance</span><span class="zh">相关性</span></strong><span class="en"> is BM25 by default (term frequency / inverse document frequency), extended with
+      <em>function score</em> boosts:</span><span class="zh">默认使用 BM25（词频/逆文档频率），并通过<em>函数评分</em>加权扩展：</span></p>
+      <ul>
+        <li><code>has_inventory: true</code><span class="en"> gets a multiplicative boost (out-of-stock items rank lower by default).</span><span class="zh"> 获得乘法加权（无库存商品默认排名靠后）。</span></li>
+        <li><span class="en">Merchant-pinned products receive a fixed additive boost stored in <code>boost_score</code>.</span><span class="zh">商家置顶商品获得存储在 <code>boost_score</code> 中的固定加法加权。</span></li>
+        <li><span class="en">Historical click-through and purchase rates can be incorporated as a <code>field_value_factor</code> on a
+        <code>popularity_score</code> field that the indexer updates periodically.</span><span class="zh">历史点击率和购买率可作为 <code>field_value_factor</code> 加入 <code>popularity_score</code> 字段，由 Indexer 定期更新。</span></li>
+      </ul>
+      <p><strong><span class="en">Zero-downtime reindex via alias swap</span><span class="zh">通过别名切换实现零停机重建索引</span></strong><span class="en"> is the safe procedure whenever the index mapping needs to change
+      (new field, changed analyzer, new boost). Never reindex in place under live traffic — a mapping conflict mid-reindex corrupts the live index.</span><span class="zh">是索引映射需要变更时（新字段、修改分析器、新加权）的安全操作规程。绝不在线上流量下原地重建索引——重建过程中的映射冲突会损坏线上索引。</span></p>
+
+      <pre><code><span class="c"># 1. Create a new versioned index with the new mapping</span>
+PUT /products_v4
+{ <span class="s">"mappings"</span>: { ... new mapping ... },
+  <span class="s">"settings"</span>: { <span class="s">"number_of_shards"</span>: <span class="n">24</span>, <span class="s">"refresh_interval"</span>: <span class="s">"30s"</span> } }
+
+<span class="c"># 2. Reindex into new index (read from v3, write to v4)</span>
+POST /_reindex
+{ <span class="s">"source"</span>: { <span class="s">"index"</span>: <span class="s">"products_v3"</span> },
+  <span class="s">"dest"</span>:   { <span class="s">"index"</span>: <span class="s">"products_v4"</span>, <span class="s">"version_type"</span>: <span class="s">"external"</span> } }
+
+<span class="c"># 3. While reindex runs, the CDC pipeline writes to BOTH indices</span>
+<span class="c">#    (dual-write mode in the indexer — set by feature flag)</span>
+
+<span class="c"># 4. Verify doc counts, run query quality tests against v4</span>
+GET /products_v4/_count
+
+<span class="c"># 5. Atomically swap the alias — zero downtime</span>
+POST /_aliases
+{ <span class="s">"actions"</span>: [
+    { <span class="s">"remove"</span>: { <span class="s">"index"</span>: <span class="s">"products_v3"</span>, <span class="s">"alias"</span>: <span class="s">"products"</span> } },
+    { <span class="s">"add"</span>:    { <span class="s">"index"</span>: <span class="s">"products_v4"</span>, <span class="s">"alias"</span>: <span class="s">"products"</span> } }
+  ] }
+
+<span class="c"># 6. Disable dual-write; delete products_v3 after confidence window</span></code></pre>
+
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Never reindex in place under live traffic</span><span class="zh">绝不在线上流量下原地重建索引</span></span>
+        <span class="en">If you PUT a new mapping onto the live index, Elasticsearch may reject documents that fail the new mapping until the
+        index is fully updated, creating a window of silent data loss. Additionally, a reindex operation consuming cluster
+        resources alongside live query traffic causes severe latency spikes. Always build the new index alongside the old one
+        and flip the alias atomically.</span><span class="zh">若将新映射 PUT 到线上索引，Elasticsearch 可能在索引完全更新前拒绝不符合新映射的文档，造成静默数据丢失窗口。此外，重建索引操作与线上查询流量共同消耗集群资源会导致严重的延迟尖峰。务必在旧索引旁边构建新索引，然后原子性地切换别名。</span>
+      </div>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs</span><span class="zh">权衡对比</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Multi-tenancy topology</span><span class="zh">多租户拓扑</span></td>
+            <td><span class="en">Index-per-shop — perfect isolation, per-shop analyzer config</span><span class="zh">每店铺独立索引——完全隔离，每店铺独立分析器配置</span></td>
+            <td><span class="en">Shared index with <code>shop_id</code> routing — efficient at scale, noisy-neighbor risk</span><span class="zh">带 <code>shop_id</code> 路由的共享索引——规模效率高，存在嘈杂邻居风险</span></td>
+            <td><span class="en">Shared index for the long tail; dedicated index for merchants &gt; ~500k products</span><span class="zh">长尾使用共享索引；商品数超约 50 万件的商家使用专属索引</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Index freshness strategy</span><span class="zh">索引新鲜度策略</span></td>
+            <td><span class="en">Async CDC / Kafka — decoupled, seconds latency, survives search cluster outage</span><span class="zh">异步 CDC / Kafka——解耦，秒级延迟，可承受搜索集群故障</span></td>
+            <td><span class="en">Synchronous dual-write on product save — instant freshness, couples write availability to search health</span><span class="zh">商品保存时同步双写——即时新鲜，将写入可用性与搜索健康状态耦合</span></td>
+            <td><span class="en">Async CDC for default; synchronous only if SLA demands sub-second freshness (rare and expensive)</span><span class="zh">默认异步 CDC；仅当 SLA 要求亚秒级新鲜度时才同步（罕见且昂贵）</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Search technology</span><span class="zh">搜索技术</span></td>
+            <td><span class="en">Elasticsearch / OpenSearch — proven, full-featured, operationally heavy</span><span class="zh">Elasticsearch / OpenSearch——成熟、功能完整，运维负担较重</span></td>
+            <td><span class="en">SQL full-text (MATCH … AGAINST) — low ops overhead, weak at scale, no facets, no scoring</span><span class="zh">SQL 全文检索（MATCH … AGAINST）——运维开销低，规模能力弱，无分面，无评分</span></td>
+            <td><span class="en">Search engine is non-negotiable at Shopify's scale; SQL LIKE is a prototype-only choice</span><span class="zh">在 Shopify 规模下搜索引擎不可替代；SQL LIKE 仅适合原型阶段</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Inventory in search index</span><span class="zh">搜索索引中的库存</span></td>
+            <td><span class="en">Store <code>has_inventory</code> in index — fast filter, can go stale (inventory changes constantly)</span><span class="zh">在索引中存储 <code>has_inventory</code>——过滤速度快，可能过时（库存持续变化）</span></td>
+            <td><span class="en">Join inventory at query time from inventory service — always fresh, adds ~10–20 ms per query</span><span class="zh">查询时从库存服务关联——始终最新，每次查询增加约 10–20 ms</span></td>
+            <td><span class="en">Store in index with near-real-time updates via the same CDC pipeline; tolerate seconds of staleness on in-stock flag</span><span class="zh">存储在索引中并通过同一 CDC 管道近实时更新；对库存标志容忍秒级过时</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Relevance config</span><span class="zh">相关性配置</span></td>
+            <td><span class="en">Per-merchant relevance tuning (custom boosts, field weights) — maximum relevance</span><span class="zh">每商家独立相关性调优（自定义加权、字段权重）——最高相关性</span></td>
+            <td><span class="en">Single global relevance config — simpler ops, lower quality for niche verticals</span><span class="zh">单一全局相关性配置——运维更简单，垂直细分领域质量较低</span></td>
+            <td><span class="en">Global BM25 + boost_score field writable per-merchant; full per-tenant relevance config as a premium feature</span><span class="zh">全局 BM25 + 每商家可写的 boost_score 字段；完整的每租户相关性配置作为高级功能</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Reindex strategy</span><span class="zh">重建索引策略</span></td>
+            <td><span class="en">In-place mapping update + reindex — simpler, causes downtime / data loss risk</span><span class="zh">原地映射更新 + 重建索引——更简单，存在停机/数据丢失风险</span></td>
+            <td><span class="en">Blue/green alias swap (new index built alongside old) — complex, zero downtime</span><span class="zh">蓝绿别名切换（新索引与旧索引并行构建）——复杂，零停机</span></td>
+            <td><span class="en">Always alias-swap; never reindex in place under live traffic</span><span class="zh">始终使用别名切换；绝不在线上流量下原地重建索引</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">A merchant just saved a product and it does not appear in search results — how do you debug?</span><span class="zh">商家刚保存了一件商品，但它未出现在搜索结果中——如何排查？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Work through the pipeline stages: (1) confirm the row exists in MySQL with the expected updated_at timestamp;
+            (2) check the outbox table or Debezium connector lag — did the event publish to Kafka? (3) check Kafka consumer lag
+            on the <code>catalog.product.changes</code> topic — is the indexer keeping up? (4) query the search cluster directly
+            by document ID to see if the document is present and what its current field values are; (5) check indexer error logs
+            for rejected bulk upsert requests (mapping conflicts, circuit-breaker trips).
+            The most common root causes are: Debezium connector falling behind, indexer rejecting documents due to a mapping
+            incompatibility, or the merchant editing a product in <code>draft</code> status (which is filtered from search).</span><span class="zh">逐级排查管道各阶段：(1) 确认 MySQL 中该行存在且 updated_at 时间戳符合预期；(2) 检查 outbox 表或 Debezium 连接器延迟——事件是否发布到 Kafka？(3) 检查 <code>catalog.product.changes</code> topic 上的 Kafka 消费者延迟——Indexer 是否跟得上？(4) 直接通过文档 ID 查询搜索集群，确认文档是否存在及当前字段值；(5) 检查 Indexer 错误日志中被拒绝的 bulk upsert 请求（映射冲突、熔断器触发）。最常见的根本原因：Debezium 连接器滞后、Indexer 因映射不兼容拒绝文档，或商家编辑的商品处于 <code>draft</code> 状态（被搜索过滤）。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you perform a zero-downtime reindex when the mapping changes?</span><span class="zh">映射变更时如何执行零停机重建索引？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Use the alias swap pattern described in the deep dive: create a versioned new index, run the reindex API to copy
+            documents, enable dual-write in the indexer (all new CDC events go to both old and new indices during the transition),
+            validate quality, then atomically swap the search alias. The alias flip is a metadata operation — it is instantaneous
+            and search queries targeting the alias are redirected transparently. Disable dual-write and delete the old index after
+            a confidence window of ~24 hours.</span><span class="zh">使用深度分析中描述的别名切换模式：创建带版本号的新索引，运行 reindex API 复制文档，在 Indexer 中启用双写（过渡期间所有新 CDC 事件同时写入新旧两个索引），验证质量后原子性切换搜索别名。别名切换是元数据操作——瞬间完成，针对别名的搜索查询会透明重定向。约 24 小时置信窗口后禁用双写并删除旧索引。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">A merchant has 5 million products — how do you handle their initial index build and ongoing operations?</span><span class="zh">某商家有 500 万件商品——如何处理初始索引构建和持续运营？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">For initial ingestion: provision a dedicated index for this merchant (skipping the shared index), run a bulk import
+            job reading directly from MySQL with high parallelism (not through Kafka, which would serialize the load). The bulk
+            import can use a higher <code>refresh_interval</code> (60 s instead of 1 s) and <code>number_of_replicas: 0</code>
+            during indexing, then restore replicas afterward. A 5M-product index takes ~1–2 hours at 2,000 docs/sec.
+            Ongoing: the CDC pipeline routes their events to their dedicated index; reindex operations are scoped to their index
+            only, not the shared cluster.</span><span class="zh">初始导入：为该商家分配专属索引（跳过共享索引），直接从 MySQL 高并发读取并运行批量导入任务（不经 Kafka，否则会序列化负载）。批量导入期间可使用更高的 <code>refresh_interval</code>（60 秒而非 1 秒）和 <code>number_of_replicas: 0</code>，完成后再恢复副本。500 万商品的索引在 2,000 文档/秒的速度下约需 1–2 小时。持续运营：CDC 管道将其事件路由到专属索引；重建索引操作仅限于其索引，不影响共享集群。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How would you add ML-based personalized ranking?</span><span class="zh">如何加入基于机器学习的个性化排序？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The canonical approach: train a Learning-to-Rank (LTR) model offline using click/purchase signals
+            (query, product_id, position, clicked). Deploy it as a re-ranking layer: retrieve the top-100 candidates from
+            the search cluster using BM25 + business boosts (fast), then apply the LTR model to re-rank them (using features
+            like buyer history, seasonal signals, product recency). Elasticsearch has a native LTR plugin; alternatively run
+            re-ranking in the Search Service. Key constraint: the first-stage retrieval must be fast and recall-high enough
+            that the LTR stage is operating on a complete candidate set.</span><span class="zh">标准方案：使用点击/购买信号（query、product_id、position、clicked）离线训练 Learning-to-Rank (LTR) 模型。将其部署为重排序层：先用 BM25 + 业务加权从搜索集群检索 top-100 候选（速度快），再应用 LTR 模型重排序（使用买家历史、季节性信号、商品新鲜度等特征）。Elasticsearch 有原生 LTR 插件；也可在 Search Service 中运行重排序。关键约束：第一阶段检索必须足够快且召回率足够高，确保 LTR 阶段在完整候选集上运行。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you handle multi-language storefronts?</span><span class="zh">如何处理多语言店铺？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Each language requires its own analyzer (English uses the English stemmer; Japanese requires kuromoji tokenization;
+            Arabic needs right-to-left handling). The document should store translated fields per locale:
+            <code>title_en</code>, <code>title_ja</code>, etc. The search query targets the field for the active locale.
+            Synonym dictionaries are also per-locale. At index time, the indexer fetches available translations from the
+            translations service and indexes all locale-specific fields in one document.
+            This avoids per-locale indices (which would multiply cluster size by the number of languages).</span><span class="zh">每种语言需要独立的分析器（英语用英语词干分析器；日语需要 kuromoji 分词；阿拉伯语需要从右到左处理）。文档应按语言区域存储翻译字段：<code>title_en</code>、<code>title_ja</code> 等。搜索查询针对当前语言区域对应的字段。同义词词典也按语言区分。索引时，Indexer 从翻译服务获取可用翻译，在单个文档中索引所有语言区域字段。这避免了按语言区域建立独立索引（否则集群规模会随语言数量成倍增加）。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do out-of-stock items get filtered without stale index data?</span><span class="zh">如何在不依赖过时索引数据的情况下过滤缺货商品？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Inventory quantity changes are high-frequency (every sale updates a variant). The CDC pipeline captures these
+            changes and the indexer updates the <code>has_inventory</code> boolean field. With a healthy pipeline, staleness
+            is seconds. For storefronts that require exact in-stock filtering, add a lightweight join at query time: retrieve
+            the top-N results from the search cluster (ignoring inventory), then hit the inventory service in a batched call
+            to filter or re-rank based on live stock. This adds ~10–20 ms but is exactly accurate. The choice between these
+            two approaches is a freshness vs. latency trade-off that should be discussed with the product team.</span><span class="zh">库存数量变更频率很高（每次销售都会更新变体）。CDC 管道捕获这些变更，Indexer 更新 <code>has_inventory</code> 布尔字段。管道健康时，过时时长为秒级。对于需要精确库存过滤的店铺，可在查询时增加轻量级关联：从搜索集群检索 top-N 结果（忽略库存），然后批量调用库存服务根据实时库存过滤或重排序。这增加约 10–20 ms 但完全精确。两种方案的选择是新鲜度与延迟的权衡，应与产品团队讨论。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A merchant bulk-edits 100k products — how does the index keep up without lag spikes?</span><span class="zh">商家批量编辑 10 万件商品时，索引如何保持同步而不出现延迟峰值？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Bulk edits produce a burst of CDC events that can overwhelm the indexer if consumed naively. The solution is a combination of buffering and fairness. Kafka naturally absorbs the burst; the indexer reads in micro-batches and uses the Elasticsearch <code>_bulk</code> API to amortize per-document overhead. Crucially, Kafka partitions by <code>shop_id</code>, and the indexer assigns one consumer thread per partition. To prevent one bulk-editing merchant from starving others sharing the same partition, implement per-shop token-bucket rate limiting or a weighted fair-queue inside the indexer: cap any single shop to at most N% of bulk throughput per window. This ensures a 100k-product edit is processed steadily in the background — finishing in minutes — while neighboring shops continue to receive near-real-time updates.</span><span class="zh">批量编辑会产生 CDC 事件洪峰，若不加控制会淹没 Indexer。解决方案是缓冲与公平调度相结合。Kafka 天然吸收流量突增；Indexer 以微批方式消费并通过 Elasticsearch <code>_bulk</code> API 摊销单文档开销。关键在于：Kafka 按 <code>shop_id</code> 分区，Indexer 为每个分区分配一个消费线程。为防止一个大批量任务饿死同分区的其他商家，可在 Indexer 内部实现令牌桶限速或加权公平队列：将任意单个商家在时间窗口内的批量吞吐量上限设为总量的 N%。这样 10 万件商品的编辑任务将在后台平稳处理（约需数分钟），而其他商家仍能享受近实时的索引更新。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you implement "did you mean" / spell correction?</span><span class="zh">如何实现"您是否要搜索"/ 拼写纠错功能？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Spell correction combines three signals. First, fuzzy matching (edit distance 1–2 via <code>fuzziness: AUTO</code>) catches common typos inline and requires no extra infrastructure. Second, Elasticsearch's phrase suggester compares the query against indexed terms and proposes the closest real term by edit distance — this produces classic "did you mean" suggestions. Third, and most effective for a large catalog, mine historical query logs: when a session with query "runing shoe" is followed by a correction to "running shoe" and a purchase, record that mapping. Aggregate these correction pairs into a learned correction dictionary and apply them as a query rewrite before the search executes. Popular-term suggestions (autocomplete-style) also naturally bias users toward well-spelled queries.</span><span class="zh">拼写纠错结合三种信号。第一，模糊匹配（<code>fuzziness: AUTO</code>，编辑距离 1–2）可内联修正常见拼写错误，无需额外基础设施。第二，Elasticsearch 的 phrase suggester 将查询词与索引词对比，按编辑距离推荐最接近的真实词——产生经典的"您是否要搜索"提示。第三，也是最有效的方式：挖掘历史查询日志——当会话中"runing shoe"之后被纠正为"running shoe"并促成购买，就记录该映射。将这些纠错对汇聚成学习型纠错词典，在搜索执行前以查询重写的方式应用。热门词建议（自动补全）也会自然地引导用户输入拼写正确的词。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">Where does personalized ranking per buyer live in the architecture?</span><span class="zh">买家个性化排序在架构中处于哪个位置？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The search index is intentionally kept generic — it stores base relevance signals (BM25 scores, inventory status, merchant boosts) shared across all buyers of a shop. Personalization sits in a separate re-ranking layer between the search cluster and the response to the buyer. The flow is: (1) first-stage retrieval from Elasticsearch returns the top-100–500 candidates using fast BM25 + business boosts; (2) a lightweight re-ranker (running in the Search Service or a dedicated ranking service) applies per-user signals — purchase history, category affinity, session context — to re-order the candidates; (3) only the final top-N are returned to the buyer. Keeping the index shared means you avoid per-user index maintenance; all personalization state lives in a fast user-feature store (Redis or a feature platform) that the re-ranker reads at query time.</span><span class="zh">搜索索引被有意保持通用——存储所有买家共享的基础相关性信号（BM25 分数、库存状态、商家加权）。个性化位于搜索集群与买家响应之间独立的重排序层。流程如下：(1) Elasticsearch 的第一阶段检索利用快速的 BM25 + 业务加权返回 100–500 个候选；(2) 轻量级重排序器（运行在 Search Service 或专用排序服务中）应用用户级信号——购买历史、品类偏好、会话上下文——对候选重新排序；(3) 仅将最终 top-N 返回给买家。保持索引共享意味着无需维护每用户索引；所有个性化状态存储在快速的用户特征存储（Redis 或特征平台）中，供重排序器在查询时读取。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you handle synonyms, including merchant-specific synonym dictionaries?</span><span class="zh">如何处理同义词，包括商家自定义的同义词词典？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Synonyms can be applied at index time (the analyzer expands synonyms when indexing a document) or at query time (a <code>synonym_graph</code> token filter rewrites the query before it hits the inverted index). Query-time synonyms are strongly preferred for Shopify's use case: merchants can update their synonym dictionaries instantly without triggering a full reindex of their catalog. The global synonym dictionary (e.g., "sneaker ↔ trainer ↔ shoe") lives in a shared configuration store; each shop's overrides are stored per-shop and injected into the search request DSL dynamically by the Search Service. Multi-word synonyms (e.g., "t-shirt → tee shirt") require the <code>synonym_graph</code> filter rather than the simple <code>synonym</code> filter to correctly handle phrase tokenization.</span><span class="zh">同义词可在索引时应用（分析器在索引文档时展开同义词），也可在查询时应用（<code>synonym_graph</code> token filter 在查询命中倒排索引前重写查询）。对于 Shopify 的场景，强烈推荐查询时同义词：商家可即时更新同义词词典，无需触发全量重建索引。全局同义词词典（如"sneaker ↔ trainer ↔ shoe"）存储在共享配置中心；每个商家的覆盖配置按商家存储，由 Search Service 在请求时动态注入搜索 DSL。多词同义词（如"t-shirt → tee shirt"）需使用 <code>synonym_graph</code> filter 而非简单的 <code>synonym</code> filter，以正确处理短语分词。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you support multi-language product catalogs?</span><span class="zh">如何支持多语言商品目录？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Language-specific text analysis is the core requirement: the English analyzer (stemming, stopwords) is wrong for Japanese or Arabic. The recommended approach is to store per-locale fields on the single product document — e.g., <code>title_en</code>, <code>title_ja</code>, <code>title_ar</code> — each mapped with the appropriate analyzer (English stemmer, Kuromoji tokenizer for Japanese, ICU tokenizer for CJK characters in general). The search query targets the field matching the active locale. Language detection (using a library like langdetect or the ICU plugin) runs at index time to pick the right analyzer when the merchant has not explicitly specified a locale. Synonym dictionaries and autocomplete sub-fields are also per-locale. This avoids multiplying the number of Elasticsearch indices by language count, keeping cluster management feasible.</span><span class="zh">语言特定的文本分析是核心需求：英语分析器（词干化、停用词）对日语或阿拉伯语完全不适用。推荐方案是在单个商品文档中存储每语言字段——如 <code>title_en</code>、<code>title_ja</code>、<code>title_ar</code>——每个字段使用相应的分析器（英语词干分析器、日语 Kuromoji tokenizer、CJK 通用 ICU tokenizer）。搜索查询针对与当前语言环境匹配的字段。语言检测（使用 langdetect 库或 ICU 插件）在索引时运行，在商家未明确指定语言环境时选择正确的分析器。同义词词典和自动补全子字段也是按语言区分的。这避免了 Elasticsearch 索引数量随语言数量成倍增加，保持集群管理的可行性。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you measure and continuously improve search relevance?</span><span class="zh">如何衡量并持续提升搜索相关性？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Relevance improvement requires a closed feedback loop combining offline evaluation and online experimentation. Offline: curate a set of judged query–product pairs (human-labeled or sampled from merchant merchandising rules) and compute nDCG (Normalized Discounted Cumulative Gain) against the current ranking — this gives a stable, reproducible metric for comparing ranking changes. Online: run A/B tests on live traffic, measuring click-through rate (CTR), add-to-cart rate, and conversion rate on search result pages. Zero-result rate and search abandonment rate are leading indicators of relevance problems. The critical discipline is closing the loop: behavioral signals (clicks, purchases, zero-result queries) should feed back into the ranking model and synonym dictionaries on a regular cadence, so relevance improves automatically as query patterns evolve.</span><span class="zh">相关性提升需要结合离线评估与在线实验的闭环反馈。离线：整理一组有标注的"查询-商品"对（人工标注或从商家选品规则中采样），针对当前排序计算 nDCG（归一化折损累积增益）——这提供了稳定、可复现的指标用于比较排序变更效果。在线：在真实流量上运行 A/B 测试，衡量搜索结果页面的点击率（CTR）、加购率和转化率。零结果率和搜索放弃率是相关性问题的领先指标。最关键的纪律是关闭反馈循环：行为信号（点击、购买、零结果查询）应定期回流到排序模型和同义词词典，使相关性随查询模式演化而自动提升。</span></p>
+          </div>
+        </details>
+      </div>
+
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these five things</span><span class="zh">Staff 级总结——务必说出这五点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><strong><span class="en">Decouple indexing from writes via CDC/outbox:</span><span class="zh">通过 CDC/outbox 将索引与写入解耦：</span></strong><span class="en"> the Catalog Service never touches the search cluster;
+          Kafka absorbs spikes and provides durability. Freshness is a deliberate eventual-consistency choice, not a bug.</span><span class="zh"> Catalog Service 从不直接操作搜索集群；Kafka 吸收流量峰值并提供持久性。新鲜度是有意为之的最终一致性选择，不是缺陷。</span></li>
+          <li><strong><span class="en">Shared index + shop routing for the long tail, dedicated indices for whales:</span><span class="zh">长尾使用共享索引 + 店铺路由，巨型商家使用专属索引：</span></strong><span class="en"> index-per-shop is
+          operationally impossible at Shopify's merchant count; routing + mandatory shop_id filter gives isolation at low overhead.</span><span class="zh"> 在 Shopify 的商家体量下，每店铺独立索引在运维上不可行；路由 + 强制 shop_id 过滤器以低开销实现隔离。</span></li>
+          <li><strong><span class="en">Relevance = BM25 + business boosts:</span><span class="zh">相关性 = BM25 + 业务加权：</span></strong><span class="en"> in-stock, merchant pins, and historical popularity are injected
+          at query time via function scores, keeping the base BM25 ranking clean and separately tunable.</span><span class="zh"> 库存状态、商家置顶和历史热度通过函数评分在查询时注入，保持基础 BM25 排序的清晰性和独立可调性。</span></li>
+          <li><strong><span class="en">Alias swap is the only safe way to reindex:</span><span class="zh">别名切换是唯一安全的重建索引方式：</span></strong><span class="en"> always build the new index alongside the live one, validate,
+          and flip the alias atomically. Reindexing in place under live traffic risks data loss.</span><span class="zh"> 始终在线上索引旁边构建新索引，验证后原子性切换别名。在线上流量下原地重建索引存在数据丢失风险。</span></li>
+          <li><strong><span class="en">Inventory in the index is an intentional staleness trade-off:</span><span class="zh">索引中存储库存是有意为之的过时权衡：</span></strong><span class="en"> constant inventory updates can be
+          propagated via the same CDC pipeline; if exact freshness is required, a lightweight join at query time is the safety valve.</span><span class="zh"> 持续的库存更新可通过同一 CDC 管道传播；若需要精确新鲜度，查询时的轻量级关联是安全阀。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2>Sources</h2></div>
+      <ul class="sources">
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify: catalog, search, and platform architecture</a></li>
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify System Design Interview guide</a></li>
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">Interview Query — Shopify Software Engineer interview guide</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="05_shopping_cart.html">← 05 · Shopping Cart</a> &nbsp;·&nbsp; <a href="07_webhook_delivery.html">Next: 07 · Webhook Delivery →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

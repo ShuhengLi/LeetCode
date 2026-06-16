@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>09 · Notification System — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 09 · Notifications</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← All questions</a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4>This question</h4>
+    <a href="#reqs"><span class="n">1</span> Clarify</a>
+    <a href="#est"><span class="n">2</span> Estimate</a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> Data model</a>
+    <a href="#arch"><span class="n">5</span> Architecture</a>
+    <a href="#deep"><span class="n">6</span> Deep dives</a>
+    <a href="#trade"><span class="n">7</span> Trade-offs</a>
+    <a href="#follow"><span class="n">8</span> Follow-ups</a>
+    <h4>Navigate</h4>
+    <a href="08_rate_limiter.html"><span class="n">←</span> 08 Rate Limiter</a>
+    <a href="10_analytics_pipeline.html"><span class="n">→</span> 10 Analytics</a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 3 · Ecosystem · ★★★☆☆</div>
+      <h1><span class="en">Design a Notification System</span><span class="zh">设计通知系统</span></h1>
+      <p><span class="en">"Order confirmations, shipping updates, and merchant alerts across email, SMS, and push — at BFCM scale. <strong>A missing order confirmation erodes buyer trust as surely as an oversell.</strong> Design for guaranteed delivery, multi-provider failover, deduplication, and compliance."</span><span class="zh">"跨邮件、SMS 和推送渠道的订单确认、物流更新和商户提醒——要在 BFCM 规模下运行。<strong>一封缺失的订单确认邮件对买家信任的损害，不亚于超卖。</strong>设计要保证送达、多供应商故障转移、去重和合规。"</span></p>
+      <div class="meta">
+        <span class="chip"><span class="en">Tests: async fan-out + reliability</span><span class="zh">考查：异步扇出 + 可靠性</span></span>
+        <span class="chip"><span class="en">Multi-channel + dedupe + failover</span><span class="zh">多渠道 + 去重 + 故障转移</span></span>
+        <span class="chip">60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question matters at Shopify</span><span class="zh">为什么这道题在 Shopify 面试中很重要</span></span>
+      <span class="en">Notifications are <strong>the tail of every sale</strong>. Buyers expect an order confirmation within seconds; merchants expect a "you made a sale!" push the moment it happens. At BFCM, tens of millions of order events fan out across email, SMS, and push in minutes. Dropping or doubling a message has real business cost — missed confirmations trigger support tickets, chargebacks, and churn.</span><span class="zh">通知是<strong>每笔销售的收尾动作</strong>。买家期望在购买后数秒内收到订单确认；商户期望在成交瞬间收到推送。BFCM 期间，数千万订单事件在几分钟内扇出至邮件、SMS 和推送渠道。丢失或重复发送消息都有真实业务代价——遗漏确认邮件会引发工单、退款争议和用户流失。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">明确需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 主动澄清，切勿假设</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Multiple channels: <strong>email, SMS, push</strong> (in-app can come later).</span><span class="zh">多渠道：<strong>邮件、SMS、推送</strong>（站内信可后续扩展）。</span></li>
+            <li><span class="en">Transactional notifications (order confirmed, shipped, delivered) <em>and</em> marketing (flash-sale blast).</span><span class="zh">事务性通知（订单确认、已发货、已送达）<em>以及</em>营销通知（促销活动群发）。</span></li>
+            <li><span class="en">Templated, <strong>localized</strong>, and personalized messages (buyer name, order details, locale).</span><span class="zh">基于模板的<strong>本地化</strong>个性化消息（买家姓名、订单详情、语言区域）。</span></li>
+            <li><span class="en">User <strong>preferences and opt-out</strong> per channel and per topic.</span><span class="zh">用户可按渠道和主题设置<strong>偏好与退订</strong>。</span></li>
+            <li><span class="en">Delivery status tracking: QUEUED → SENT → DELIVERED / BOUNCED / FAILED.</span><span class="zh">投递状态跟踪：QUEUED → SENT → DELIVERED / BOUNCED / FAILED。</span></li>
+            <li><span class="en">Scheduling (send at a given time, or immediately).</span><span class="zh">计划发送（指定时间或立即发送）。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>At-least-once delivery + deduplication</strong> = effectively-once semantics.</span><span class="zh"><strong>至少一次投递 + 去重</strong> = 实际上的恰好一次语义。</span></li>
+            <li><span class="en">High availability — no single-provider outage stops notifications.</span><span class="zh">高可用——单一供应商故障不得中断通知服务。</span></li>
+            <li><span class="en"><strong>Multi-provider failover</strong>: Twilio/SES down is a degradation, not an outage.</span><span class="zh"><strong>多供应商故障转移</strong>：Twilio/SES 宕机是降级，而非全面中断。</span></li>
+            <li><span class="en">Spike absorption: BFCM order-confirmation burst of millions in minutes.</span><span class="zh">吸收流量峰值：BFCM 期间数分钟内数百万订单确认涌入。</span></li>
+            <li><span class="en"><strong>Priority</strong>: transactional must never be delayed by a marketing blast.</span><span class="zh"><strong>优先级</strong>：营销群发绝不能拖延事务性通知。</span></li>
+            <li><span class="en">Compliance: CAN-SPAM, GDPR opt-out, quiet hours, suppression lists.</span><span class="zh">合规：CAN-SPAM、GDPR 退订、免打扰时段、抑制名单。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to ask out loud</span><span class="zh">需要大声澄清的问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Which channels are in scope? Email + SMS only, or push too? In-app?</span><span class="zh">哪些渠道在范围内？仅邮件 + SMS，还是也包括推送？站内信呢？</span></li>
+          <li><span class="en">Transactional only, or also marketing bulk sends?</span><span class="zh">仅事务性通知，还是也包括营销群发？</span></li>
+          <li><span class="en">Delivery guarantee: at-least-once with dedupe, or best-effort?</span><span class="zh">投递保证：至少一次加去重，还是尽力而为？</span></li>
+          <li><span class="en">Do we own templates and localization, or is that a separate service?</span><span class="zh">模板和本地化由我们负责，还是由独立服务提供？</span></li>
+          <li><span class="en">Provider strategy: single provider with fallback, or active multi-provider load-balancing?</span><span class="zh">供应商策略：单供应商加兜底，还是多供应商主动负载均衡？</span></li>
+          <li><span class="en">Expected daily volume and BFCM peak? Per-channel split? <em>(This drives queue sizing and provider rate limits.)</em></span><span class="zh">预期日均量和 BFCM 峰值是多少？各渠道占比？<em>（这决定了队列容量和供应商速率限制的设计。）</em></span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the real bottleneck</span><span class="zh">找到真正的瓶颈</span></span></div>
+      <p><span class="en">The key insight: <strong>the bottleneck is provider rate limits and deliverability reputation, not our internal compute.</strong> Internal throughput scales horizontally; external provider caps are fixed contracts. Design the queue layer so we can absorb bursts internally and drain toward providers at their max accepted rate.</span><span class="zh">核心洞察：<strong>瓶颈在于供应商速率限制和送达信誉，而非我们的内部计算能力。</strong>内部吞吐可水平扩展；外部供应商上限是固定合同。设计队列层，使我们能在内部吸收突发流量，并以供应商可接受的最大速率向其输出。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">50M</div><div class="l"><span class="en">notifications / day (normal)</span><span class="zh">通知条数 / 天（正常）</span></div></div>
+        <div class="kpi"><div class="v">~30k</div><div class="l"><span class="en">peak msg/s (BFCM order burst)</span><span class="zh">峰值消息/秒（BFCM 订单峰值）</span></div></div>
+        <div class="kpi"><div class="v">60/30/10</div><div class="l"><span class="en">email / push / SMS split (%)</span><span class="zh">邮件 / 推送 / SMS 占比（%）</span></div></div>
+        <div class="kpi"><div class="v">~10k</div><div class="l"><span class="en">provider send API calls/s (cap)</span><span class="zh">供应商发送 API 调用/秒（上限）</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en"><strong>Producers</strong> (order, fulfillment, inventory) emit events; Notification Service fans out to per-channel queues. Decoupling here is the key architectural bet.</span><span class="zh"><strong>生产者</strong>（订单、履约、库存）发出事件；通知服务扇出到各渠道队列。这里的解耦是核心架构赌注。</span></li>
+        <li><span class="en">At 50 M/day, average throughput is ~580 msg/s — trivial. The problem is the <strong>10-minute BFCM burst</strong> producing ~30k/s: the queue must absorb the delta and drain at provider rate.</span><span class="zh">50M/天时，平均吞吐约 580 msg/s——微不足道。真正的问题是 <strong>10 分钟 BFCM 峰值</strong>产生约 30k/s：队列必须吸收这一差值，并以供应商速率平稳输出。</span></li>
+        <li><span class="en"><strong>Dedupe store</strong>: keyed by <code>dedupe_key</code>. A 24 h TTL caps resident keys at ~1 day, so 50 M × ~100 bytes ≈ ~5 GB. Fits easily in Redis; a bloom filter can pre-screen cheaply.</span><span class="zh"><strong>去重存储</strong>：以 <code>dedupe_key</code> 为键，24 小时 TTL 将驻留键限制在约 1 天内，50M × ~100 字节 ≈ ~5 GB。轻松放入 Redis；布隆过滤器可廉价地做前置筛查。</span></li>
+        <li><span class="en">Template rendering is CPU-bound but stateless; autoscale a render fleet behind the queue consumers.</span><span class="zh">模板渲染是 CPU 密集但无状态的；在队列消费者后面自动扩缩一个渲染集群即可。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 级信号</span></span>
+        <span class="en">State clearly: <em>"Internal throughput is cheap to scale horizontally. The real constraint is the external provider contract — rate limits and sender reputation. My queue is the shock absorber between our burst and their cap."</em> Then size the queue retention accordingly (minutes to hours).</span><span class="zh">明确表达：<em>"内部吞吐可廉价水平扩展。真正的约束是外部供应商合同——速率限制和发件人信誉。我的队列是我们峰值与其上限之间的缓冲器。"</em>然后据此合理设定队列保留时长（分钟到小时级别）。</span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <div class="api">
+        <div class="row"><span class="method post">POST</span><span class="path">/notifications</span><span class="desc">{recipient, channel|"auto", templateId, locale, data, dedupeKey, priority} → {notificationId, status}</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/notifications/{id}</span><span class="desc">{id, status, channel, sentAt, deliveredAt, error}</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/notifications/batch</span><span class="desc">array of notification requests (marketing bulk send)</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/preferences/{userId}</span><span class="desc">per-channel, per-topic opt-in status + quiet hours</span></div>
+        <div class="row"><span class="method put">PUT</span><span class="path">/preferences/{userId}</span><span class="desc">update opt-out / quiet-hours preferences</span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/templates/{id}</span><span class="desc">versioned template for channel + locale</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/provider/webhook</span><span class="desc">inbound: delivery receipts, bounces, complaints from providers</span></div>
+      </div>
+      <p><span class="en">The <code>dedupeKey</code> (e.g., <code>order_1234:confirmed:email</code>) is the <strong>idempotency anchor</strong>. Callers supply it; the service enforces uniqueness within the dedupe window. <code>channel:"auto"</code> lets the service resolve the best channel given user preferences.</span><span class="zh"><code>dedupeKey</code>（如 <code>order_1234:confirmed:email</code>）是<strong>幂等锚点</strong>。调用方提供该字段，服务在去重窗口内强制保证唯一性。<code>channel:"auto"</code> 允许服务根据用户偏好自动选择最佳渠道。</span></p>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <h4><span class="en">Source of truth (relational — MySQL/Postgres)</span><span class="zh">权威数据源（关系型数据库 — MySQL/Postgres）</span></h4>
+      <pre><code><span class="k">notification</span>(id PK, recipient_id, channel, template_id, locale,
+             status <span class="c">-- QUEUED|SENT|DELIVERED|BOUNCED|FAILED</span>,
+             dedupe_key UNIQUE, priority <span class="c">-- TRANSACTIONAL|MARKETING</span>,
+             provider_id, provider_msg_id, render_data JSON,
+             created_at, sent_at, delivered_at, failed_at)
+
+<span class="k">template</span>(id PK, channel, locale, subject, body_text, body_html,
+         version INT, is_active BOOL, created_at)
+
+<span class="k">preference</span>(user_id, channel, topic, opted_in BOOL,
+           quiet_hours_start TIME, quiet_hours_end TIME, timezone,
+           PRIMARY KEY (user_id, channel, topic))
+
+<span class="k">provider</span>(id PK, channel, name, priority INT, health_score FLOAT,
+         rate_limit_per_sec INT, is_active BOOL)</code></pre>
+      <h4><span class="en">Hot-path (Redis)</span><span class="zh">热路径（Redis）</span></h4>
+      <pre><code><span class="n">dedupe:{dedupe_key}</span>     <span class="c">// SET NX EX 86400  — 24-hour dedupe window</span>
+<span class="n">provider:{id}:circuit</span>  <span class="c">// circuit-breaker state: CLOSED|OPEN|HALF_OPEN</span>
+<span class="n">provider:{id}:errs</span>     <span class="c">// sliding error count (INCR + EX)</span>
+<span class="n">notif:{id}:status</span>      <span class="c">// latest status cache for GET /notifications/{id}</span></code></pre>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">producer → queue → worker → provider</span><span class="zh">生产者 → 队列 → Worker → 供应商</span></span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 820 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#7c3aed"/>
+            </marker>
+          </defs>
+
+          <!-- === Producer tier === -->
+          <!-- Order Service -->
+          <rect x="30" y="20" width="140" height="48" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="100" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Order Service</text>
+          <text x="100" y="57" text-anchor="middle" font-size="10.5" fill="#008060">order.confirmed</text>
+
+          <!-- Fulfillment Service -->
+          <rect x="200" y="20" width="150" height="48" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="275" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Fulfillment Svc</text>
+          <text x="275" y="57" text-anchor="middle" font-size="10.5" fill="#008060">shipment.updated</text>
+
+          <!-- Inventory Service -->
+          <rect x="380" y="20" width="150" height="48" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="455" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Inventory Svc</text>
+          <text x="455" y="57" text-anchor="middle" font-size="10.5" fill="#008060">low_stock alert</text>
+
+          <!-- Marketing Campaign -->
+          <rect x="560" y="20" width="150" height="48" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="635" y="41" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Marketing Svc</text>
+          <text x="635" y="57" text-anchor="middle" font-size="10.5" fill="#008060">campaign blast</text>
+
+          <!-- Arrows from producers down to Notification Service -->
+          <g stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)">
+            <line x1="100" y1="68" x2="100" y2="118"/>
+            <line x1="275" y1="68" x2="280" y2="118"/>
+            <line x1="455" y1="68" x2="400" y2="118"/>
+            <line x1="635" y1="68" x2="560" y2="118"/>
+          </g>
+
+          <!-- === Notification Service === -->
+          <rect x="80" y="118" width="500" height="60" rx="9" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+          <text x="330" y="143" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">Notification Service</text>
+          <text x="330" y="162" text-anchor="middle" font-size="10.5" fill="#2563eb">validate · dedupe check (Redis NX) · resolve preferences · resolve template · enqueue to priority lane</text>
+
+          <!-- Preference Service (right sidebar) -->
+          <rect x="648" y="96" width="150" height="46" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="723" y="114" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Preference Svc</text>
+          <text x="723" y="131" text-anchor="middle" font-size="10" fill="#008060">opt-out · quiet hours</text>
+          <line x1="580" y1="140" x2="648" y2="120" stroke="#008060" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)"/>
+
+          <!-- Template Service (right sidebar) -->
+          <rect x="648" y="152" width="150" height="46" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="723" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Template Svc</text>
+          <text x="723" y="187" text-anchor="middle" font-size="10" fill="#008060">versioned · localized · render</text>
+          <line x1="580" y1="160" x2="648" y2="173" stroke="#008060" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)"/>
+
+          <!-- Arrow from Notification Service to queues -->
+          <line x1="330" y1="178" x2="330" y2="212" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+
+          <!-- === Priority queues === -->
+          <!-- Transactional queue -->
+          <rect x="80" y="212" width="220" height="54" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="190" y="235" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka — Transactional</text>
+          <text x="190" y="253" text-anchor="middle" font-size="10.5" fill="#ea580c">high priority · low latency</text>
+
+          <!-- Marketing queue -->
+          <rect x="340" y="212" width="220" height="54" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="450" y="235" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka — Marketing</text>
+          <text x="450" y="253" text-anchor="middle" font-size="10.5" fill="#ea580c">bulk · throttled · lower priority</text>
+
+          <!-- Arrows from queues to workers -->
+          <g stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)">
+            <line x1="190" y1="266" x2="190" y2="308"/>
+            <line x1="450" y1="266" x2="450" y2="308"/>
+          </g>
+
+          <!-- === Per-channel workers === -->
+          <!-- Email worker -->
+          <rect x="30" y="308" width="138" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="99" y="330" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Email Worker</text>
+          <text x="99" y="349" text-anchor="middle" font-size="10" fill="#008060">render · rate-limit</text>
+
+          <!-- SMS worker -->
+          <rect x="188" y="308" width="138" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="257" y="330" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">SMS Worker</text>
+          <text x="257" y="349" text-anchor="middle" font-size="10" fill="#008060">render · quiet hours</text>
+
+          <!-- Push worker -->
+          <rect x="346" y="308" width="138" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="415" y="330" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Push Worker</text>
+          <text x="415" y="349" text-anchor="middle" font-size="10" fill="#008060">FCM / APNs token lookup</text>
+
+          <!-- Status DB writer -->
+          <rect x="504" y="308" width="138" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="573" y="330" text-anchor="middle" font-size="12.5" font-weight="700" fill="#04684f">Status Writer</text>
+          <text x="573" y="349" text-anchor="middle" font-size="10" fill="#008060">webhook ingestion</text>
+
+          <!-- Arrows from workers to provider adapters -->
+          <g stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)">
+            <line x1="99" y1="362" x2="99" y2="408"/>
+            <line x1="257" y1="362" x2="257" y2="408"/>
+            <line x1="415" y1="362" x2="415" y2="408"/>
+          </g>
+
+          <!-- === Provider adapters === -->
+          <!-- SES/SendGrid primary -->
+          <rect x="18" y="408" width="162" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="99" y="430" text-anchor="middle" font-size="12" font-weight="700" fill="#b91c1c">SES / SendGrid</text>
+          <text x="99" y="448" text-anchor="middle" font-size="10" fill="#dc2626">primary email provider</text>
+
+          <!-- Twilio primary SMS -->
+          <rect x="188" y="408" width="138" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="257" y="430" text-anchor="middle" font-size="12" font-weight="700" fill="#b91c1c">Twilio</text>
+          <text x="257" y="448" text-anchor="middle" font-size="10" fill="#dc2626">primary SMS provider</text>
+
+          <!-- FCM/APNs push -->
+          <rect x="346" y="408" width="138" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="415" y="430" text-anchor="middle" font-size="12" font-weight="700" fill="#b91c1c">FCM / APNs</text>
+          <text x="415" y="448" text-anchor="middle" font-size="10" fill="#dc2626">push provider</text>
+
+          <!-- Fallback email -->
+          <rect x="18" y="484" width="162" height="48" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="99" y="505" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">Mailgun (fallback)</text>
+          <text x="99" y="521" text-anchor="middle" font-size="10" fill="#7c3aed">circuit-breaker failover</text>
+
+          <!-- Fallback SMS -->
+          <rect x="188" y="484" width="138" height="48" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="257" y="505" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">SNS (fallback)</text>
+          <text x="257" y="521" text-anchor="middle" font-size="10" fill="#7c3aed">circuit-breaker failover</text>
+
+          <!-- Failover arrows (dashed) -->
+          <g stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)">
+            <line x1="99" y1="462" x2="99" y2="484"/>
+            <line x1="257" y1="462" x2="257" y2="484"/>
+          </g>
+
+          <!-- Delivery webhook back to Status Writer -->
+          <path d="M504,435 C540,435 550,420 573,408" stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)"/>
+          <text x="548" y="413" font-size="10" fill="#7c3aed">delivery webhook</text>
+
+          <!-- Status Writer → Notification DB -->
+          <path d="M573,308 V250 H648" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+
+          <!-- Notification DB -->
+          <rect x="648" y="226" width="150" height="48" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="723" y="246" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6d28d9">Notification DB</text>
+          <text x="723" y="263" text-anchor="middle" font-size="10" fill="#7c3aed">status · history · audit</text>
+
+          <!-- Redis dedupe -->
+          <rect x="648" y="308" width="150" height="54" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="723" y="330" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">Redis</text>
+          <text x="723" y="349" text-anchor="middle" font-size="10.5" fill="#dc2626">dedupe · circuit state</text>
+
+          <!-- Notification Service ↔ Redis (dedupe / circuit state), routed along right margin -->
+          <path d="M580,158 H812 V335 H800" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)"/>
+
+          <!-- Labels -->
+          <text x="320" y="208" font-size="10" fill="#ea580c" text-anchor="middle">priority fan-out</text>
+          <text x="128" y="304" font-size="10" fill="#94a3b8" text-anchor="middle">drain per-channel</text>
+        </svg>
+        <div class="legend">
+          <span><i style="background:#008060"></i> service / worker</span>
+          <span><i style="background:#2563eb"></i> notification service</span>
+          <span><i style="background:#dc2626"></i> provider / cache (Redis)</span>
+          <span><i style="background:#7c3aed"></i> datastore / fallback</span>
+          <span><i style="background:#ea580c"></i> async queue (Kafka)</span>
+        </div>
+        <div class="cap"><span class="en">Producers → Notification Service (dedupe + preferences) → priority Kafka lanes → per-channel workers → primary provider adapters with circuit-breaker failover to secondary. Delivery webhooks write status back. Redis holds dedupe keys and circuit-breaker state.</span><span class="zh">生产者 → 通知服务（去重 + 偏好检查）→ 优先级 Kafka 通道 → 各渠道 Worker → 主供应商适配器（熔断器故障转移至备用供应商）。投递 webhook 将状态写回。Redis 存储去重键和熔断器状态。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件逐一说明</span></h4>
+      <ul>
+        <li><span class="en"><strong>Producers</strong> (Order, Fulfillment, Inventory, Marketing) call <code>POST /notifications</code> — or publish domain events consumed by the Notification Service. They supply a <code>dedupeKey</code>.</span><span class="zh"><strong>生产者</strong>（订单、履约、库存、营销）调用 <code>POST /notifications</code>，或发布由通知服务消费的领域事件，并提供 <code>dedupeKey</code>。</span></li>
+        <li><span class="en"><strong>Notification Service</strong> — validates, checks Redis for the <code>dedupeKey</code> (SET NX EX), resolves user preferences and quiet hours, fetches and renders the template, and enqueues to the appropriate Kafka priority lane.</span><span class="zh"><strong>通知服务</strong>——验证请求，在 Redis 中检查 <code>dedupeKey</code>（SET NX EX），解析用户偏好和免打扰时段，获取并渲染模板，然后将通知入队至对应的 Kafka 优先级通道。</span></li>
+        <li><span class="en"><strong>Priority Kafka lanes</strong> — transactional and marketing are separate topics (and separate consumer groups), so a marketing blast never steals throughput from order confirmations.</span><span class="zh"><strong>Kafka 优先级通道</strong>——事务性和营销消息分属不同 topic（及不同消费者组），营销群发绝不会抢占订单确认的吞吐量。</span></li>
+        <li><span class="en"><strong>Per-channel workers</strong> — stateless, autoscale. Handle channel-specific concerns: email rate-limiting per sender domain, SMS quiet-hours enforcement, push token refresh.</span><span class="zh"><strong>各渠道 Worker</strong>——无状态、自动扩缩。处理渠道特有事务：邮件按发件域名限速、SMS 执行免打扰时段、推送刷新 token。</span></li>
+        <li><span class="en"><strong>Provider adapters</strong> — wrap each external API with a circuit breaker. On trip, route to secondary provider. Track error counts in Redis.</span><span class="zh"><strong>供应商适配器</strong>——为每个外部 API 包裹熔断器。熔断触发时，将流量路由至备用供应商，并在 Redis 中跟踪错误计数。</span></li>
+        <li><span class="en"><strong>Delivery webhooks</strong> — providers call back with delivery receipts, bounces, and spam complaints. Status Writer updates the Notification DB and maintains suppression lists.</span><span class="zh"><strong>投递 webhook</strong>——供应商通过回调推送投递回执、退信和垃圾邮件投诉。Status Writer 更新通知数据库并维护抑制名单。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深度探讨</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 级信号所在</span></span></div>
+
+      <h3><span class="en">① Async fan-out and spike absorption</span><span class="zh">① 异步扇出与峰值吸收</span></h3>
+      <p><span class="en">Kafka decouples producers from provider rate limits. At BFCM, tens of millions of <code>order.confirmed</code> events arrive in minutes; the queue buffers them and workers drain toward providers at the negotiated rate. Workers autoscale based on consumer-group lag. Key design choice: <strong>separate topics for transactional vs marketing</strong> so a campaign blast — even a misconfigured one sending 100 M messages — cannot consume all consumer group capacity and delay order confirmations.</span><span class="zh">Kafka 将生产者与供应商速率限制解耦。BFCM 期间，数千万 <code>order.confirmed</code> 事件在数分钟内涌入；队列缓冲这些事件，Worker 以协商好的速率向供应商输出。Worker 根据消费者组积压量自动扩缩。关键设计决策：<strong>事务性通知与营销通知使用独立 topic</strong>，即使一次发送 1 亿条的错误配置的营销推送，也无法耗尽所有消费者组容量而拖延订单确认。</span></p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Transactional vs marketing isolation</span><span class="zh">事务性通知与营销通知隔离</span></span>
+        <span class="en">Transactional notifications (order confirmed, shipped) are <strong>business-critical and latency-sensitive</strong>: a buyer expects an email within seconds of purchase. Marketing blasts are best-effort with flexible timing. Mixing them on one queue means a bulk send can fill the queue and delay order confirmations by minutes. Use separate Kafka topics with separate consumer groups and separate provider rate-limit pools. Transactional consumers get higher replica count and priority scheduling.</span><span class="zh">事务性通知（订单确认、已发货）<strong>业务关键且对延迟敏感</strong>：买家期望在购买后数秒内收到邮件。营销群发则是尽力而为，时间灵活。混合在同一队列意味着群发可能填满队列，使订单确认延迟数分钟。应使用独立的 Kafka topic、独立的消费者组和独立的供应商速率限制池；事务性消费者分配更高副本数和调度优先级。</span>
+      </div>
+
+      <h3><span class="en">② Idempotency and deduplication</span><span class="zh">② 幂等性与去重</span></h3>
+      <p><span class="en">Producers are retried (e.g., the order service retries the HTTP call if it times out). Without deduplication, a buyer gets two order-confirmation emails. The <code>dedupeKey</code> (caller-supplied, e.g., <code>order_9999:confirmed:email</code>) is the anchor. The Notification Service does an atomic Redis <code>SET NX EX 86400</code> — if the key already exists, the notification is silently dropped and an idempotent 200 is returned.</span><span class="zh">生产者会重试（例如订单服务在 HTTP 调用超时时重试）。若没有去重，买家会收到两封订单确认邮件。<code>dedupeKey</code>（由调用方提供，如 <code>order_9999:confirmed:email</code>）是锚点。通知服务执行原子 Redis <code>SET NX EX 86400</code>——若键已存在，则静默丢弃该通知并返回幂等的 200。</span></p>
+      <pre><code><span class="c">-- dedupe check in Notification Service (pseudocode)</span>
+<span class="k">def</span> accept_notification(req):
+    key = <span class="s">f"dedupe:{req.dedupe_key}"</span>
+    <span class="k">if not</span> redis.set(key, <span class="n">1</span>, nx=<span class="k">True</span>, ex=<span class="n">86400</span>):
+        <span class="c"># already seen — idempotent no-op</span>
+        <span class="k">return</span> existing_notification_id(req.dedupe_key)
+    notification = persist(req)
+    enqueue(notification)
+    <span class="k">return</span> notification.id</code></pre>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Dedupe window edge case</span><span class="zh">去重窗口边界情况</span></span>
+        <span class="en">A 24-hour TTL covers most retry storms. However: if the <em>same</em> logical event should produce a new notification after 24 h (e.g., a repeated low-stock alert), the caller must use a time-scoped <code>dedupeKey</code>. Document this contract clearly. Also, if the Notification Service crashes after writing to Redis but before persisting to DB, the key exists but no notification record does — a background reconciler can detect and replay these orphan keys.</span><span class="zh">24 小时 TTL 覆盖了大多数重试风暴。但是：若<em>同一</em>逻辑事件需要在 24 小时后再次产生通知（如重复的低库存提醒），调用方必须使用带时间范围的 <code>dedupeKey</code>。务必清晰记录此合约。另外，若通知服务在写入 Redis 后、持久化到 DB 前崩溃，键存在但无通知记录——后台协调任务可检测并重放这些孤儿键。</span>
+      </div>
+
+      <h3><span class="en">③ Multi-provider failover and circuit breakers</span><span class="zh">③ 多供应商故障转移与熔断器</span></h3>
+      <p><span class="en">Each channel has a primary and one or more secondary providers, each with a health score tracked in Redis. The provider adapter maintains a circuit breaker per provider: after N consecutive failures or an error-rate threshold, the circuit opens and traffic routes to the secondary. A half-open probe after a cool-down period allows recovery.</span><span class="zh">每个渠道配置一个主供应商和一个或多个备用供应商，各自的健康分数在 Redis 中追踪。供应商适配器为每个供应商维护一个熔断器：在 N 次连续失败或错误率超过阈值后，熔断器打开，流量路由至备用供应商。冷却期后通过半开探测允许恢复。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">State</span><span class="zh">状态</span></th><th><span class="en">Behavior</span><span class="zh">行为</span></th><th><span class="en">Recovery</span><span class="zh">恢复</span></th></tr></thead>
+        <tbody>
+          <tr><td>CLOSED <span class="en">(normal)</span><span class="zh">（正常）</span></td><td><span class="en">All requests go to primary. Error count tracked in Redis sliding window.</span><span class="zh">所有请求发往主供应商。错误计数在 Redis 滑动窗口中追踪。</span></td><td>—</td></tr>
+          <tr><td>OPEN <span class="en">(tripped)</span><span class="zh">（已熔断）</span></td><td><span class="en">Requests immediately routed to secondary. No calls to primary.</span><span class="zh">请求立即路由至备用供应商，不再调用主供应商。</span></td><td><span class="en">After cool-down (e.g. 60 s), allow one probe.</span><span class="zh">冷却后（如 60 秒），允许一次探测请求。</span></td></tr>
+          <tr><td>HALF-OPEN</td><td><span class="en">One request probes primary. Success → CLOSE; failure → OPEN again.</span><span class="zh">一个请求探测主供应商。成功 → CLOSED；失败 → 重新 OPEN。</span></td><td><span class="en">Exponential back-off on re-open.</span><span class="zh">重新打开时采用指数退避。</span></td></tr>
+        </tbody>
+      </table>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Single provider outage = total notification blackout</span><span class="zh">单一供应商故障 = 通知全面中断</span></span>
+        <span class="en">If your system is wired to a single email provider (e.g., SES only) and SES has an outage, <strong>every buyer on an active order loses their confirmation email</strong>. This has happened at scale — provider incidents are real. Without a configured secondary, the circuit breaker trips but there is nowhere to route traffic. The fix is contractual (multi-provider agreement) and architectural (adapter pattern + health routing). Budget for two providers from day one.</span><span class="zh">若系统只接入单一邮件供应商（如仅 SES）而 SES 发生故障，<strong>所有有活跃订单的买家都将收不到确认邮件</strong>。这在实际规模下确实发生过——供应商故障是真实存在的。没有配置备用供应商，熔断器会触发，但没有地方可以路由流量。解决方案既是合同层面的（多供应商协议），也是架构层面的（适配器模式 + 健康路由）。从第一天起就为两个供应商预算。</span>
+      </div>
+
+      <h3><span class="en">④ Templating, localization, and versioning</span><span class="zh">④ 模板、本地化与版本控制</span></h3>
+      <p><span class="en">Templates are stored per <code>(channel, locale, version)</code>. The Template Service renders the body by injecting the <code>render_data</code> JSON blob. Versioning is critical: a broken template deployment must not invalidate all in-flight notifications. Workers always render at send time using the version pinned at enqueue, so a template update does not retroactively corrupt queued messages.</span><span class="zh">模板按 <code>(channel, locale, version)</code> 存储。模板服务通过注入 <code>render_data</code> JSON 块来渲染正文。版本控制至关重要：一次错误的模板部署不得使所有正在处理中的通知失效。Worker 始终使用入队时固定的版本在发送时渲染，因此模板更新不会追溯性地损坏已入队的消息。</span></p>
+      <ul>
+        <li><span class="en">Fallback chain: <code>pt-BR</code> → <code>pt</code> → <code>en</code> — never send a raw template key as buyer-visible text.</span><span class="zh">语言兜底链：<code>pt-BR</code> → <code>pt</code> → <code>en</code>——绝不将原始模板键作为买家可见的文本发送。</span></li>
+        <li><span class="en">Preview/test endpoint lets merchants proof a notification before activating a template version.</span><span class="zh">预览/测试端点让商户在激活模板版本前进行审核。</span></li>
+        <li><span class="en">For merchant-customizable templates (e.g., "you made a sale!" branding), keep a <code>merchant_id</code> override layer on top of the global defaults.</span><span class="zh">对于商户可定制模板（如"您成交了！"品牌定制），在全局默认模板之上保留一个 <code>merchant_id</code> 覆盖层。</span></li>
+      </ul>
+
+      <h3><span class="en">⑤ Preferences, compliance, and suppression</span><span class="zh">⑤ 偏好设置、合规与抑制名单</span></h3>
+      <p><span class="en">The Preference Service is checked before enqueue. Key rules:</span><span class="zh">偏好服务在入队前进行检查。核心规则：</span></p>
+      <ul>
+        <li><span class="en"><strong>Transactional vs marketing legal distinction</strong>: under CAN-SPAM and most GDPR interpretations, transactional notifications (order confirmed, shipped) are exempt from opt-out requirements. Marketing blasts require explicit consent. The system must tag every notification with its type and enforce this rule in the preference check.</span><span class="zh"><strong>事务性通知与营销通知的法律区分</strong>：根据 CAN-SPAM 和大多数 GDPR 解释，事务性通知（订单确认、已发货）免于退订要求；营销群发则需要明确同意。系统必须为每条通知标注类型，并在偏好检查中执行此规则。</span></li>
+        <li><span class="en"><strong>Quiet hours</strong>: SMS and push notifications have legal and UX quiet hours (e.g., 9 PM–8 AM in the recipient's timezone). Workers must check the recipient's timezone and either delay or drop depending on notification type.</span><span class="zh"><strong>免打扰时段</strong>：SMS 和推送通知存在法律和用户体验层面的免打扰时段（如接收者时区晚 9 点至早 8 点）。Worker 必须检查接收者时区，并根据通知类型决定延迟发送或丢弃。</span></li>
+        <li><span class="en"><strong>Suppression lists</strong>: bounced addresses and spam complainants are added to a suppression list (updated via provider webhooks). Every send checks this list before calling the provider to protect sender reputation.</span><span class="zh"><strong>抑制名单</strong>：退信地址和垃圾邮件投诉者被加入抑制名单（通过供应商 webhook 更新）。每次发送在调用供应商前都会检查此名单，以保护发件人信誉。</span></li>
+        <li><span class="en"><strong>GDPR deletion</strong>: a right-to-erasure request must purge notification history and preferences. Implement via a soft-delete + async scrub worker.</span><span class="zh"><strong>GDPR 删除</strong>：被遗忘权请求必须清除通知历史和偏好数据。通过软删除 + 异步清理 Worker 实现。</span></li>
+      </ul>
+
+      <h3><span class="en">⑥ Ordering semantics and delivery guarantees</span><span class="zh">⑥ 消息顺序语义与投递保证</span></h3>
+      <p><span class="en">For a given order, "Order Confirmed" must not arrive after "Order Shipped". Guaranteeing strict ordering while maintaining high throughput requires intentional design: partition Kafka by <code>recipient_id + order_id</code>. All notifications for one order land on one partition, consumed sequentially by one worker instance. This trades throughput for ordering per recipient.</span><span class="zh">对于同一订单，"订单确认"不得在"订单已发货"之后送达。在保持高吞吐的同时保证严格顺序需要精心设计：按 <code>recipient_id + order_id</code> 对 Kafka 进行分区。一个订单的所有通知都落在同一分区，由同一 Worker 实例按顺序消费。这以牺牲部分吞吐量换取了每个接收者维度的顺序保证。</span></p>
+      <p><span class="en">At-least-once delivery (from the queue) plus the Redis dedupe gives <strong>effectively-once</strong> delivery to the provider. Delivery to the end device (e.g., an email reaching the inbox) depends on the provider and is tracked asynchronously via webhooks — not synchronously on the send call.</span><span class="zh">来自队列的至少一次投递加上 Redis 去重，实现了对供应商的<strong>实际上的恰好一次</strong>投递。消息到达终端设备（如邮件进入收件箱）取决于供应商，通过 webhook 异步追踪——并非在发送调用时同步确认。</span></p>
+      <pre><code><span class="c">-- effectively-once delivery contract</span>
+<span class="c">-- 1. Queue guarantees: at-least-once (worker may re-consume on crash)</span>
+<span class="c">-- 2. Provider call may retry on network failure (idempotency key passed)</span>
+<span class="c">-- 3. Redis dedupe prevents the same dedupeKey from being sent twice</span>
+<span class="c">-- 4. Result: at most one provider API call per (dedupeKey, window)</span>
+<span class="c">-- 5. Delivery to device tracked async via provider webhook → status update</span></code></pre>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs</span><span class="zh">权衡取舍</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr><td><span class="en">Delivery guarantee</span><span class="zh">投递保证</span></td><td><span class="en">At-least-once + Redis dedupe (effectively-once)</span><span class="zh">至少一次 + Redis 去重（实际上的恰好一次）</span></td><td><span class="en">Exactly-once via transactional DB + queue (2PC)</span><span class="zh">通过事务 DB + 队列实现精确一次（2PC）</span></td><td><span class="en"><strong>At-least-once + dedupe</strong>: simpler, scales horizontally; 2PC kills throughput and requires distributed transaction support</span><span class="zh"><strong>至少一次 + 去重</strong>：更简单，水平可扩展；2PC 会严重降低吞吐量且需要分布式事务支持</span></td></tr>
+          <tr><td><span class="en">Send path</span><span class="zh">发送路径</span></td><td><span class="en">Synchronous in request handler (latency-coupled to provider)</span><span class="zh">在请求处理器中同步发送（与供应商延迟耦合）</span></td><td><span class="en">Async via queue (decoupled)</span><span class="zh">通过队列异步发送（解耦）</span></td><td><span class="en"><strong>Async always</strong>: provider latency/errors must not block the caller; queue absorbs spikes that synchronous can never handle</span><span class="zh"><strong>始终异步</strong>：供应商延迟/错误不得阻塞调用方；队列能吸收同步方式永远无法应对的流量峰值</span></td></tr>
+          <tr><td><span class="en">Provider strategy</span><span class="zh">供应商策略</span></td><td><span class="en">Single provider with retry</span><span class="zh">单供应商加重试</span></td><td><span class="en">Multi-provider with circuit-breaker failover</span><span class="zh">多供应商加熔断器故障转移</span></td><td><span class="en"><strong>Multi-provider</strong>: provider outages are real; added cost and complexity justified by availability; use single provider only for very low volume with manual fallback</span><span class="zh"><strong>多供应商</strong>：供应商故障是真实存在的；为高可用付出的额外成本和复杂度是值得的；仅在极低流量且有人工兜底时才考虑单供应商</span></td></tr>
+          <tr><td><span class="en">Queue topology</span><span class="zh">队列拓扑</span></td><td><span class="en">Single queue, all channels and priorities mixed</span><span class="zh">单一队列，所有渠道和优先级混合</span></td><td><span class="en">Priority lanes: separate topics per type and channel</span><span class="zh">优先级通道：按类型和渠道分开 topic</span></td><td><span class="en"><strong>Priority lanes</strong>: prevents marketing blasts from starving transactional; small operational overhead vs significant latency protection</span><span class="zh"><strong>优先级通道</strong>：防止营销群发"饿死"事务性通知；轻微的运维开销换来显著的延迟保护</span></td></tr>
+          <tr><td><span class="en">Template engine</span><span class="zh">模板引擎</span></td><td><span class="en">Build in-house (full control, localization, versioning)</span><span class="zh">自研（完全掌控、本地化、版本管理）</span></td><td><span class="en">Buy (SendGrid dynamic templates, Braze)</span><span class="zh">购买（SendGrid 动态模板、Braze）</span></td><td><span class="en">Buy at early scale; build when merchant customization, versioning, and multi-channel parity become blockers</span><span class="zh">早期规模时购买；当商户定制、版本管理和多渠道一致性成为瓶颈时再自研</span></td></tr>
+          <tr><td><span class="en">Ordering per recipient</span><span class="zh">接收者维度的消息顺序</span></td><td><span class="en">Partition by recipient+order_id (strict order, reduced parallelism)</span><span class="zh">按 recipient+order_id 分区（严格顺序，并行度降低）</span></td><td><span class="en">No partition key (max throughput, arbitrary order)</span><span class="zh">不设分区键（最大吞吐，顺序不保证）</span></td><td><span class="en"><strong>Partition by order</strong> for transactional; unkeyed for marketing where order is irrelevant — hybrid approach by queue type</span><span class="zh">事务性通知<strong>按订单分区</strong>；营销通知顺序无关则不设键——按队列类型采用混合方案</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问问题</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item"><summary><span class="en">Twilio (or SES) has an outage mid-BFCM. What happens?</span><span class="zh">Twilio（或 SES）在 BFCM 期间发生故障，会怎样？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The circuit breaker for that provider trips after consecutive failures. All new send attempts route to the secondary provider (e.g., SNS for SMS, Mailgun for email). Messages already acknowledged by Kafka but not yet sent remain in the worker's in-flight set and are retried via the secondary. The queue continues to accumulate during the outage; once the primary recovers and the circuit half-opens, traffic gradually returns. No notifications are lost — they are delayed until the secondary or primary can accept them. Crucially, <strong>the Kafka queue buffers for its full retention window</strong> (e.g. 7 days); the system self-heals when any live provider is available — only a multi-day dual-provider outage risks aging messages out.</span><span class="zh">该供应商的熔断器在连续失败后触发。所有新的发送尝试路由至备用供应商（如 SMS 用 SNS，邮件用 Mailgun）。已被 Kafka 确认但尚未发送的消息留在 Worker 的在途集合中，通过备用供应商重试。故障期间队列持续积压；主供应商恢复并熔断器进入半开状态后，流量逐渐恢复。没有通知会丢失——它们只是延迟，直到备用或主供应商可以接受为止。关键在于，<strong>Kafka 队列在整个保留窗口期内缓冲消息</strong>（如 7 天）；只要有任何活跃的供应商，系统就能自愈——只有多天的双供应商同时故障才有消息过期的风险。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">How do you handle email bounces and spam complaints to protect sender reputation?</span><span class="zh">如何处理退信和垃圾邮件投诉以保护发件人信誉？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Provider webhooks deliver bounce and complaint events in near real-time. The Status Writer ingests these and writes the email address to a suppression list (stored in DB + cached in Redis). Every subsequent send call for that address is short-circuited before reaching the provider. Hard bounces (invalid address) are permanent suppressions; soft bounces get an exponential back-off. Spam complaints trigger immediate suppression plus an alert to the merchant team. The suppression list is also consulted during the warm-up of new sender IPs to avoid damaging a fresh IP's reputation.</span><span class="zh">供应商 webhook 以近实时方式推送退信和投诉事件。Status Writer 摄入这些事件并将邮件地址写入抑制名单（存储在 DB 中并缓存在 Redis）。之后对该地址的所有发送调用在到达供应商前就被短路。硬退信（地址无效）永久抑制；软退信采用指数退避。垃圾邮件投诉触发立即抑制并向商户团队发出告警。新发送 IP 预热期间也会查询抑制名单，以避免损害新 IP 的信誉。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">How do you guarantee "Order Confirmed" arrives before "Order Shipped"?</span><span class="zh">如何保证"订单确认"在"订单已发货"之前送达？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Partition the Kafka topic by <code>order_id</code>. All events for a given order land on the same partition and are consumed in offset order by one worker at a time. The worker processes events for an order sequentially — it will not start the "Shipped" notification until it has committed the "Confirmed" one. This only guarantees ordering at enqueue time; the producer must also ensure it emits events in the correct order. Use event sequence numbers or a <code>preceding_event_id</code> field so the worker can detect and buffer out-of-order arrivals rather than silently sending in wrong order.</span><span class="zh">按 <code>order_id</code> 对 Kafka topic 进行分区。同一订单的所有事件落在同一分区，由同一 Worker 按 offset 顺序消费。Worker 按顺序处理一个订单的事件——在提交"已确认"通知之前，不会开始处理"已发货"通知。这只保证入队时的顺序；生产者也必须确保以正确顺序发出事件。使用事件序列号或 <code>preceding_event_id</code> 字段，使 Worker 能检测并缓冲乱序到达的事件，而不是静默地以错误顺序发送。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">BFCM: 20 million order confirmations in 10 minutes — how does the system cope?</span><span class="zh">BFCM：10 分钟内 2000 万条订单确认——系统如何应对？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">20 M messages in 10 min = ~33k/s enqueue rate. The Notification Service fan-out writes to Kafka at this rate — Kafka handles millions of messages/sec, so internal throughput is fine. Worker autoscaling increases consumer instances based on consumer-group lag. The queue acts as a shock absorber: workers drain at the rate providers accept (e.g., SES burst limit ~14k/s per account). With two providers active and separate transactional/marketing partitioning, order confirmations have dedicated capacity. The marketing blast, if also running, drains more slowly without competing for transactional workers. Alert on consumer lag and pre-scale workers before BFCM by increasing replica counts via deployment config ahead of time.</span><span class="zh">10 分钟内 2000 万条消息 ≈ 约 33k/s 入队速率。通知服务扇出以此速率写入 Kafka——Kafka 可处理每秒数百万条消息，内部吞吐没有问题。Worker 根据消费者组积压量自动扩缩消费者实例。队列充当缓冲器：Worker 以供应商可接受的速率输出（如 SES 突发限制约 14k/s/账户）。两个供应商同时活跃加上事务性/营销通知分区，订单确认拥有专属容量。若营销群发也在进行，其消耗速度较慢且不与事务性 Worker 竞争。监控消费者积压并在 BFCM 前通过部署配置提前增加副本数进行预扩容。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">The dedupe window expires but the same event is replayed — won't the buyer get a duplicate email?</span><span class="zh">去重窗口已过期但相同事件被重放——买家会收到重复邮件吗？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">This is a real edge case. Options: (1) extend the TTL beyond the retry window — 24 h covers most replay scenarios; (2) use the Notification DB as a secondary dedupe: before enqueue, check if a row with the same <code>dedupe_key</code> exists in the DB (slower, but durable); (3) make the <code>dedupe_key</code> include a version or timestamp so genuinely re-triggered events (e.g., a re-send requested by customer support) have a distinct key. The contract with callers must define when a <code>dedupeKey</code> can be reused. Document this, as it is a common source of bugs at the producer level.</span><span class="zh">这是一个真实的边界情况。应对方案：(1) 将 TTL 延长超过重试窗口——24 小时覆盖大多数重放场景；(2) 将通知 DB 用作二级去重：入队前检查 DB 中是否已存在相同 <code>dedupe_key</code> 的记录（较慢，但持久）；(3) 让 <code>dedupe_key</code> 包含版本号或时间戳，使真正被重新触发的事件（如客服请求的重新发送）具有不同的键。与调用方的合约必须定义 <code>dedupeKey</code> 何时可以复用。务必文档化，因为这是生产者层面常见的 bug 来源。</span></p>
+          </div>
+        </details>
+        <details class="faq-item"><summary><span class="en">A buyer has opted out of marketing, but the merchant's campaign targets them. Can we still send a transactional notification?</span><span class="zh">买家已退订营销通知，但商户促销活动仍指向他们，能否仍发送事务性通知？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Yes, and this is a legally important distinction. Transactional notifications — order confirmed, shipped, delivered — are generally exempt from opt-out requirements under CAN-SPAM and GDPR because they are necessary to complete a commercial transaction the user initiated. Marketing blasts (sale announcements, promotional codes) require affirmative consent. The Preference Service checks the notification type: if type is TRANSACTIONAL, the opt-out flag for the marketing topic is irrelevant; the notification is sent. If type is MARKETING and the user has opted out of the relevant topic, the notification is dropped before enqueue. Quiet-hours enforcement applies to both types for SMS/push (legal requirement in some jurisdictions) but typically not for transactional email.</span><span class="zh">可以，这是一个在法律上非常重要的区分。事务性通知（订单确认、已发货、已送达）通常根据 CAN-SPAM 和 GDPR 的规定免于退订要求，因为它们是完成用户主动发起的商业交易所必需的。营销推送（促销公告、优惠码）则需要明确的同意。偏好服务在入队前检查通知类型：若类型为 TRANSACTIONAL，针对营销主题的退订标记与本次通知无关，通知正常发出；若类型为 MARKETING 且用户已退订相关主题，则在入队前丢弃。SMS/推送的免打扰时段对两种类型均适用（部分司法管辖区有法律要求），但通常不适用于事务性邮件。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">A template changes — how do you avoid affecting in-flight notifications?</span><span class="zh">模板更新后，如何避免影响正在处理中的通知？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Version templates and pin the version at enqueue time, not at render time. When the Notification Service accepts a request, it resolves the current active template version and records that version ID alongside the notification record. Workers always render using the pinned version, so a subsequent template deployment does not retroactively corrupt queued messages. Old versions are retained (soft-deleted, not purged) for at least the queue retention window. This means a broken template push only affects notifications enqueued after the deployment — existing in-flight ones are safe. A rollback simply activates the previous version for new enqueues.</span><span class="zh">对模板进行版本控制，并在入队时（而非渲染时）固定版本号。通知服务接受请求时，解析当前活跃模板版本并将该版本 ID 与通知记录一起存储。Worker 始终使用固定版本进行渲染，因此后续的模板部署不会影响已入队的消息。旧版本至少在队列保留窗口期内被保留（软删除，不立即清除）。这意味着一次错误的模板部署只影响部署之后入队的通知——正在处理中的通知是安全的。回滚只需将上一版本重新设为活跃状态，供新入队通知使用即可。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">Internationalization: how is locale/timezone chosen per recipient?</span><span class="zh">国际化：如何为每位接收者选择语言区域和时区？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Locale is resolved from the recipient's profile (buyer preferred language stored at account creation), falling back to the shop's default locale if none is set. Timezone is taken from the recipient's profile; if absent, the shop's timezone is used as the fallback. The Template Service renders content in the resolved locale, applying the locale fallback chain (e.g., <code>pt-BR</code> → <code>pt</code> → <code>en</code>) to ensure no raw template keys reach the buyer. Scheduling respects the recipient's timezone: SMS and push quiet-hours checks and scheduled sends are evaluated against the recipient's local time, not server UTC. Locale and timezone are resolved at enqueue time and stored on the notification record so the rendered output is deterministic even if the recipient later changes their profile settings.</span><span class="zh">语言区域优先取自接收者档案（账户创建时存储的买家首选语言），若未设置则回退到店铺默认语言区域。时区也来自接收者档案，若无则使用店铺时区作为兜底。模板服务按解析后的语言区域渲染内容，并应用语言区域兜底链（如 <code>pt-BR</code> → <code>pt</code> → <code>en</code>），确保原始模板键不会出现在买家可见的内容中。计划发送遵从接收者时区：SMS 和推送的免打扰时段检查及定时发送均以接收者本地时间为准，而非服务器 UTC。语言区域和时区在入队时解析并存储在通知记录中，因此即使接收者后来更改了档案设置，渲染结果也是确定性的。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">How do you measure deliverability and protect sender reputation?</span><span class="zh">如何衡量送达率并保护发件人信誉？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Track delivered, bounce, and complaint rates via provider webhooks ingested by the Status Writer. Key thresholds: hard bounce rate above ~2% or spam complaint rate above ~0.08% triggers an alert and halts the relevant campaign. Maintain suppression lists (bounced addresses, unsubscribes, complainants) checked before every send. Use separate IP pools for transactional and marketing traffic — a marketing campaign with elevated complaints must not damage the transactional IP's reputation. Warm up new sending IPs gradually by ramping volume over days or weeks. Implement DKIM, SPF, and DMARC on all sending domains. Report weekly on per-provider and per-campaign deliverability metrics so reputation degradation is caught early.</span><span class="zh">通过 Status Writer 摄入供应商 webhook，追踪已送达、退信和投诉率。关键阈值：硬退信率超过约 2% 或垃圾邮件投诉率超过约 0.08% 时触发告警并暂停相关活动。维护抑制名单（退信地址、退订用户、投诉者），每次发送前均进行检查。对事务性邮件和营销邮件使用独立的 IP 池——投诉率较高的营销活动不应损害事务性 IP 的信誉。通过逐步增加发送量（数天至数周）来预热新发送 IP。在所有发送域名上实施 DKIM、SPF 和 DMARC。每周报告各供应商和各活动的送达率指标，及早发现信誉下降的迹象。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">A user replies STOP to an SMS — how does opt-out propagate instantly?</span><span class="zh">用户对 SMS 回复 STOP 后，退订如何即时生效？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The SMS provider (e.g., Twilio) captures the inbound STOP reply and fires an inbound webhook to our <code>POST /provider/webhook</code> endpoint. The Status Writer processes this synchronously: it immediately updates the user's preference record to <code>opted_in = false</code> for the SMS channel and adds the phone number to the suppression list. Both the Preference Service's cache and the Redis suppression-check key are invalidated (or updated) in the same transaction, so any worker that checks preferences after this point will see the opt-out. Critically, any notification already pulled from the queue but not yet sent must re-check preferences at send time (not just at enqueue time) — a short pre-send preference check catches this race. All channels (not just SMS) must honour a STOP — if the user opts out of SMS, the system should not route the same notification to push as a workaround unless that is an explicitly separate opt-in.</span><span class="zh">SMS 供应商（如 Twilio）捕获入站的 STOP 回复后，向我们的 <code>POST /provider/webhook</code> 端点触发一个入站 webhook。Status Writer 同步处理此事件：立即将该用户 SMS 渠道的偏好记录更新为 <code>opted_in = false</code>，并将该手机号加入抑制名单。偏好服务的缓存和 Redis 抑制检查键在同一事务中失效（或更新），因此此后任何 Worker 检查偏好时均能感知退订。关键点：已从队列取出但尚未发送的通知必须在发送时（而非仅在入队时）重新检查偏好——一次简短的发送前偏好检查即可覆盖此竞态条件。所有渠道（不仅限于 SMS）都必须遵守 STOP 指令——若用户退订了 SMS，系统不应将同一通知改路由至推送作为变通，除非那是一个明确独立的订阅项。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">Immediate vs batched/digest notifications — how is it decided?</span><span class="zh">立即发送与批量/摘要通知——如何决策？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Priority and notification type drive the decision. Transactional notifications (order confirmed, shipped, payment failed) are always immediate — they carry time-sensitive information the recipient is actively waiting for. Low-priority informational alerts (daily digest, weekly summary, non-urgent merchant analytics) are batched into a digest to avoid notification fatigue. The batching policy is configurable per topic and per recipient preference: a merchant who wants real-time low-stock alerts can opt in; the default is digest. Implement digest aggregation with a scheduled job that collects pending low-priority notifications for a recipient within a window (e.g., 1 hour), renders a single digest message, and sends it as one notification. This also protects sender reputation — a single digest counts as one message, not fifty.</span><span class="zh">优先级和通知类型决定发送方式。事务性通知（订单确认、已发货、支付失败）始终立即发送——它们携带接收者正在等待的时效性信息。低优先级信息提醒（每日摘要、每周总结、非紧急商户分析报告）则批量合并为摘要发送，以避免通知疲劳。批量策略可按主题和接收者偏好配置：希望实时收到低库存提醒的商户可以开启；默认为摘要模式。通过定时任务实现摘要聚合：在一个时间窗口（如 1 小时）内收集某接收者所有待发的低优先级通知，渲染为一条摘要消息，作为一条通知发出。这同时也保护了发件人信誉——一条摘要只算作一条消息，而非五十条。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item"><summary><span class="en">How do you prevent a notification storm (e.g., 10k low-stock alerts to one merchant)?</span><span class="zh">如何防止通知风暴（例如向同一商户发送 1 万条低库存提醒）？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Apply multiple layers of protection. First, coalesce duplicate events at the Notification Service: if the same (merchant, topic, reference) tuple arrives multiple times within a window, deduplicate via the <code>dedupeKey</code> and emit only one notification. Second, rate-limit per recipient per channel: enforce a maximum notification count per hour (configurable per topic), queuing excess behind a leaky-bucket or token-bucket limiter. Third, apply per-merchant digest for low-priority alert types — aggregate all low-stock events in a rolling window into a single "You have N low-stock SKUs" digest message instead of N individual ones. Fourth, circuit-break on the publisher side: if the Inventory Service triggers more than M events/min for one merchant, the Notification Service routes them to a digest queue rather than the immediate lane. This prevents a misconfigured inventory sync or a runaway cron job from flooding a merchant's inbox.</span><span class="zh">采用多层防护。第一，在通知服务层合并重复事件：若相同的（商户、主题、引用）元组在一个时间窗口内多次到达，通过 <code>dedupeKey</code> 去重，只发出一条通知。第二，对每位接收者每个渠道进行限速：按每小时最大通知数（可按主题配置）执行限制，将超出的通知排在漏桶或令牌桶限流器之后。第三，对低优先级告警类型应用商户维度的摘要：将一个滚动窗口内的所有低库存事件聚合为一条"您有 N 个 SKU 库存不足"的摘要消息，而不是 N 条单独的消息。第四，在发布方侧熔断：若库存服务在一分钟内为同一商户触发超过 M 个事件，通知服务将其路由至摘要队列而非即时通道。这可以防止配置错误的库存同步或失控的定时任务淹没商户的收件箱。</span></p>
+          </div>
+        </details>
+      </div>
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — the six things to say</span><span class="zh">Staff 级总结——必须说清楚的六点</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>Async queue absorbs spikes and decouples producers from provider rate limits</strong> — synchronous send cannot survive BFCM.</span><span class="zh"><strong>异步队列吸收峰值并将生产者与供应商速率限制解耦</strong>——同步发送无法撑过 BFCM。</span></li>
+          <li><span class="en"><strong>dedupeKey gives effectively-once semantics</strong>: at-least-once queue + Redis NX dedupe = no duplicate emails on retry storms, without the cost of 2PC.</span><span class="zh"><strong>dedupeKey 实现实际上的恰好一次语义</strong>：至少一次队列 + Redis NX 去重 = 重试风暴中不重复发送邮件，且无需 2PC 的代价。</span></li>
+          <li><span class="en"><strong>Multi-provider failover with circuit breakers</strong>: a single provider outage must never stop all notifications; name the adapter pattern and the circuit states.</span><span class="zh"><strong>多供应商故障转移加熔断器</strong>：单一供应商故障绝不能停止所有通知；说清楚适配器模式和熔断器状态。</span></li>
+          <li><span class="en"><strong>Priority lanes keep transactional ahead of marketing</strong>: separate Kafka topics, separate consumer groups, separate rate-limit pools — never let a campaign blast delay an order confirmation.</span><span class="zh"><strong>优先级通道保证事务性通知先于营销通知</strong>：独立的 Kafka topic、独立的消费者组、独立的速率限制池——绝不让营销群发拖延订单确认。</span></li>
+          <li><span class="en"><strong>Preferences and compliance are first-class concerns, not afterthoughts</strong>: transactional/marketing type distinction, quiet hours, and suppression lists must be modeled explicitly.</span><span class="zh"><strong>偏好设置和合规是一等关注点，而非事后补救</strong>：事务性/营销通知类型区分、免打扰时段和抑制名单必须显式建模。</span></li>
+          <li><span class="en"><strong>Track delivery via provider webhooks</strong>: the send call tells you the provider accepted the message, not that it reached the device — close the loop with async webhook ingestion and status updates.</span><span class="zh"><strong>通过供应商 webhook 追踪投递状态</strong>：发送调用只告诉你供应商接受了消息，而非消息已到达设备——通过异步 webhook 摄入和状态更新闭合这个环路。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2>Sources</h2></div>
+      <ul class="sources">
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify System Design Interview patterns (notification, async, failover)</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (multi-channel notification and event-driven architecture)</a></li>
+      </ul>
+      <p style="margin-top:14px;"><a href="08_rate_limiter.html">← 08 · Rate Limiter</a> &nbsp;·&nbsp; <a href="10_analytics_pipeline.html">10 · Analytics Pipeline →</a></p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>

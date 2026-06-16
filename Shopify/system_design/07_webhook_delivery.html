@@ -1,0 +1,1092 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>07 · Webhook &amp; Event Delivery — Shopify System Design</title>
+<style>
+/* ============================================================
+   Shopify System Design Prep — shared stylesheet
+   Visual language: clean, print-friendly, color-coded steps
+   ============================================================ */
+
+:root {
+  /* brand */
+  --shopify: #008060;
+  --shopify-dark: #004c3f;
+  --shopify-lime: #5e8e3e;
+  --shopify-wash: #f1f8f5;
+
+  /* ink */
+  --ink: #1a1f36;
+  --ink-soft: #3c4257;
+  --muted: #6b7280;
+  --faint: #9aa3b2;
+
+  /* surface */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --line: #e5e8eb;
+  --line-soft: #eef1f4;
+
+  /* step accents */
+  --c-req: #2c6ecb;     --c-req-bg: #eef4fd;
+  --c-est: #0d9488;     --c-est-bg: #ecfbf7;
+  --c-api: #5b3ec8;     --c-api-bg: #f2edfc;
+  --c-data: #475569;    --c-data-bg: #f1f5f9;
+  --c-arch: #7c3aed;    --c-arch-bg: #f6f0fe;
+  --c-deep: #c2410c;    --c-deep-bg: #fff3e9;
+  --c-trade: #b45309;   --c-trade-bg: #fef6e7;
+  --c-follow: #008060;  --c-follow-bg: #ecf7f2;
+  --c-staff: #b7791f;   --c-staff-bg: #fffaeb;
+
+  /* diagram node colors (also referenced inline in SVG) */
+  --n-client: #64748b;
+  --n-edge: #2563eb;
+  --n-svc: #008060;
+  --n-store: #7c3aed;
+  --n-cache: #dc2626;
+  --n-queue: #ea580c;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.08);
+  --maxw: 980px;
+  --sidebar: 264px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--shopify); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 22px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+}
+.topbar .brand {
+  font-weight: 700; color: var(--shopify-dark);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.topbar .brand .logo {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--shopify), var(--shopify-lime));
+  display: inline-block;
+}
+.topbar .crumb { color: var(--faint); }
+.topbar .spacer { flex: 1; }
+.topbar a.back { color: var(--muted); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  max-width: calc(var(--sidebar) + var(--maxw) + 80px);
+  margin: 0 auto;
+}
+
+.sidebar {
+  position: sticky; top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+  padding: 26px 18px 40px;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sidebar h4 {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 18px 0 8px;
+}
+.sidebar a {
+  display: block; color: var(--ink-soft); padding: 5px 10px;
+  border-radius: 7px; border-left: 2px solid transparent;
+}
+.sidebar a:hover { background: var(--line-soft); text-decoration: none; }
+.sidebar a .n {
+  display: inline-block; width: 20px; color: var(--faint);
+  font-variant-numeric: tabular-nums; font-weight: 700;
+}
+
+.content {
+  padding: 30px 40px 90px;
+  min-width: 0;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  background: linear-gradient(135deg, var(--shopify-dark), var(--shopify));
+  color: #fff; border-radius: var(--radius);
+  padding: 28px 30px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.hero h1 { margin: 6px 0 8px; font-size: 28px; line-height: 1.25; color: #fff; }
+.hero p { margin: 8px 0 0; color: #d6efe6; max-width: 70ch; }
+.hero .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: #a7e3cf; font-weight: 700;
+}
+.hero .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.hero .meta .chip { background: rgba(255,255,255,.16); color: #fff; border: none; }
+
+/* ---------- chips / tags / pills ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip--hot { background: #fff1f0; color: #c0362c; border-color: #ffd9d4; }
+.chip--warm { background: #fff7e8; color: #b45309; border-color: #ffe3ad; }
+.chip--cool { background: var(--c-req-bg); color: var(--c-req); border-color: #d3e3fb; }
+.chip--svc { background: var(--shopify-wash); color: var(--shopify-dark); border-color: #c7e7da; }
+
+.stars { color: #f5a623; letter-spacing: 1px; font-size: 13px; }
+.stars .off { color: #dfe3e8; }
+
+/* ---------- headings ---------- */
+h2 { font-size: 21px; margin: 0; color: var(--ink); }
+h3 { font-size: 17px; margin: 26px 0 8px; color: var(--ink); }
+h4 { font-size: 15px; margin: 18px 0 6px; color: var(--ink-soft); }
+p { margin: 10px 0; }
+ul, ol { margin: 10px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+strong { color: var(--ink); }
+
+/* ---------- step section ---------- */
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 70px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.step-num {
+  flex: none;
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  background: var(--shopify);
+}
+.step-head .sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: auto; }
+
+/* per-step accent via data attribute */
+.step[data-accent="req"]    .step-num { background: var(--c-req); }
+.step[data-accent="est"]    .step-num { background: var(--c-est); }
+.step[data-accent="api"]    .step-num { background: var(--c-api); }
+.step[data-accent="data"]   .step-num { background: var(--c-data); }
+.step[data-accent="arch"]   .step-num { background: var(--c-arch); }
+.step[data-accent="deep"]   .step-num { background: var(--c-deep); }
+.step[data-accent="trade"]  .step-num { background: var(--c-trade); }
+.step[data-accent="follow"] .step-num { background: var(--c-follow); }
+
+/* ---------- callouts ---------- */
+.callout {
+  border-radius: var(--radius-sm);
+  padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 14.5px;
+}
+.callout .ct {
+  font-weight: 700; display: block; margin-bottom: 3px;
+  font-size: 13px; letter-spacing: .02em;
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout--info    { background: var(--c-req-bg);   border-color: #d3e3fb; }
+.callout--info .ct{ color: var(--c-req); }
+.callout--tip     { background: var(--c-follow-bg);border-color: #c7e7da; }
+.callout--tip .ct { color: var(--shopify-dark); }
+.callout--warn    { background: var(--c-trade-bg); border-color: #f6dca0; }
+.callout--warn .ct{ color: var(--c-trade); }
+.callout--danger  { background: #fff1f0;           border-color: #ffd2cc; }
+.callout--danger .ct { color: #c0362c; }
+.callout--tradeoff{ background: var(--c-deep-bg);  border-color: #f8cda8; }
+.callout--tradeoff .ct { color: var(--c-deep); }
+
+.callout--staff {
+  background: linear-gradient(180deg, #fffaeb, #fff7df);
+  border: 1px solid #f3d98a;
+  border-left: 4px solid var(--c-staff);
+}
+.callout--staff .ct { color: var(--c-staff); display: flex; align-items: center; gap: 6px; }
+
+/* ---------- cards grid ---------- */
+.cards { display: grid; gap: 14px; margin: 14px 0; }
+.cards.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cards.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 14px 16px; background: var(--panel);
+}
+.card h4 { margin: 0 0 6px; }
+.card p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.card .lead {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--shopify); margin-bottom: 4px;
+}
+
+/* requirements two-col */
+.req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.req-grid .box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; }
+.req-grid .box.fn  { border-top: 3px solid var(--c-req); }
+.req-grid .box.nfr { border-top: 3px solid var(--c-est); }
+.req-grid h4 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--c-data-bg); color: var(--ink); font-weight: 700; font-size: 13px; }
+tbody tr:nth-child(even) { background: #fbfcfd; }
+td code, th code { font-size: 12.5px; }
+
+.tbl-trade th:first-child { width: 26%; }
+.tbl-trade td:first-child { font-weight: 600; }
+
+/* estimation kpis */
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 14px 0; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--c-est-bg); }
+.kpi .v { font-size: 22px; font-weight: 800; color: var(--c-est); font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- API blocks ---------- */
+.api { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; margin: 10px 0; }
+.api .row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 13px; background: var(--panel);
+}
+.api .row:last-child { border-bottom: none; }
+.method {
+  flex: none; font-weight: 800; font-size: 11px; letter-spacing: .03em;
+  padding: 3px 8px; border-radius: 5px; color: #fff; font-family: var(--sans);
+}
+.method.get { background: #1f7a4d; }
+.method.post { background: #2c6ecb; }
+.method.put { background: #b45309; }
+.method.del { background: #c0362c; }
+.method.ws  { background: #7c3aed; }
+.api .path { color: var(--ink); }
+.api .desc { color: var(--muted); margin-left: auto; font-family: var(--sans); font-size: 12.5px; }
+
+/* ---------- code ---------- */
+pre {
+  background: #0f172a; color: #e2e8f0; border-radius: var(--radius-sm);
+  padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 12px 0; border: 1px solid #1e293b;
+}
+pre code { font-family: var(--mono); }
+:not(pre) > code {
+  background: var(--c-data-bg); color: #9333ea;
+  padding: 1.5px 6px; border-radius: 5px; font-size: 13px;
+  font-family: var(--mono); border: 1px solid var(--line);
+}
+pre .c { color: #94a3b8; }     /* comment */
+pre .k { color: #93c5fd; }     /* keyword */
+pre .s { color: #86efac; }     /* string */
+pre .n { color: #fcd34d; }     /* number/const */
+
+/* ---------- diagram ---------- */
+.diagram {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fcfdfe; padding: 16px; margin: 16px 0; overflow-x: auto;
+}
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram .cap { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* ---------- FAQ / follow-ups ---------- */
+.faq { margin: 12px 0; }
+.faq-item {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  margin: 9px 0; background: var(--panel); overflow: hidden;
+}
+.faq-item > summary {
+  cursor: pointer; padding: 12px 16px; font-weight: 650;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  color: var(--ink);
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::before {
+  content: "Q"; flex: none;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--c-follow); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.faq-item > summary::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-size: 20px; font-weight: 400;
+}
+.faq-item[open] > summary::after { content: "\2212"; }
+.faq-item[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--c-follow-bg); }
+.faq-body { padding: 12px 16px 14px; font-size: 14.5px; }
+.faq-body p:first-child { margin-top: 0; }
+
+/* small label */
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 5px; margin-right: 6px;
+}
+.tag--blue { background: var(--c-req-bg); color: var(--c-req); }
+.tag--green { background: var(--c-follow-bg); color: var(--shopify-dark); }
+.tag--orange { background: var(--c-deep-bg); color: var(--c-deep); }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
+
+/* footnote / sources */
+.sources { font-size: 13px; color: var(--muted); }
+.sources li { margin: 3px 0; }
+
+/* ============================================================
+   INDEX PAGE specifics
+   ============================================================ */
+.index-hero {
+  background: linear-gradient(135deg, var(--shopify-dark) 0%, var(--shopify) 60%, var(--shopify-lime) 130%);
+  color: #fff; border-radius: 16px; padding: 40px 38px; margin-bottom: 26px;
+  box-shadow: var(--shadow);
+}
+.index-hero h1 { font-size: 34px; margin: 8px 0 10px; color: #fff; }
+.index-hero p { color: #d6efe6; max-width: 66ch; font-size: 15.5px; }
+.index-hero .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #a7e3cf; font-weight: 700; }
+
+.section-title {
+  display: flex; align-items: baseline; gap: 12px; margin: 34px 0 6px;
+}
+.section-title h2 { font-size: 22px; }
+.section-title .hint { color: var(--muted); font-size: 13.5px; }
+
+.tier-label {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  padding: 3px 10px; border-radius: 6px; margin-bottom: 2px; letter-spacing: .03em;
+}
+.tier-1 { background: #fff1f0; color: #c0362c; }
+.tier-2 { background: var(--c-req-bg); color: var(--c-req); }
+.tier-3 { background: var(--c-arch-bg); color: var(--c-arch); }
+
+.qcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 12px 0 8px; }
+.qcard {
+  display: block; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--panel); box-shadow: var(--shadow-sm);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  color: inherit;
+}
+.qcard:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #c7e7da; text-decoration: none; }
+.qcard .qnum {
+  font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 700;
+}
+.qcard h3 { margin: 2px 0 6px; font-size: 17px; color: var(--ink); }
+.qcard p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-soft); }
+.qcard .foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.qcard .topics { display: flex; flex-wrap: wrap; gap: 5px; }
+.qcard .topics .t { font-size: 11px; color: var(--muted); background: var(--line-soft); padding: 2px 7px; border-radius: 5px; }
+
+/* process timeline */
+.timeline { border-left: 2px solid var(--line); margin: 16px 0 8px; padding-left: 0; }
+.timeline .stage {
+  position: relative; padding: 4px 0 16px 24px; margin-left: 8px;
+  border-left: 2px solid transparent;
+}
+.timeline .stage::before {
+  content: ""; position: absolute; left: -7px; top: 8px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--shopify);
+}
+.timeline .stage.key::before { background: var(--shopify); }
+.timeline .stage h4 { margin: 0; }
+.timeline .stage .when { color: var(--muted); font-size: 13px; }
+
+/* framework strip */
+.framework { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }
+.fw {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px;
+  background: var(--panel); text-align: center;
+}
+.fw .num { font-weight: 800; color: var(--shopify); font-size: 13px; }
+.fw .t { font-weight: 700; font-size: 13.5px; margin: 4px 0 2px; }
+.fw .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .content { padding: 22px 18px 70px; }
+  .cards.cols-2, .cards.cols-3, .req-grid, .qcards, .framework { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+
+/* ---------- print ---------- */
+@media print {
+  .topbar, .sidebar { display: none; }
+  .layout { display: block; max-width: none; }
+  .content { padding: 0; }
+  body { background: #fff; font-size: 11.5pt; }
+  .step, .card, .api, .faq-item, .callout { box-shadow: none; break-inside: avoid; }
+  .faq-item[open] .faq-body { display: block; }
+  .faq-item { break-inside: avoid; }
+  .hero, .index-hero { background: var(--shopify-dark) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--ink); }
+  details { open: true; }
+}
+
+
+/* ---------- i18n language toggle ---------- */
+.langtoggle{font-family:var(--sans);font-size:12.5px;font-weight:700;cursor:pointer;background:var(--shopify);color:#fff;border:none;border-radius:7px;padding:5px 12px;line-height:1;}
+.langtoggle:hover{background:var(--shopify-dark);}
+body .zh{display:none;}
+body.zh .en{display:none;}
+body.zh .zh{display:revert;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="logo"></span> Shopify System Design</span>
+  <span class="crumb">/ 07 · Webhooks</span>
+  <span class="spacer"></span>
+  <button id="langbtn" class="langtoggle" onclick="toggleLang()">中文</button>
+  <a class="back" href="index.html">← <span class="en">All questions</span><span class="zh">全部题目</span></a>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h4><span class="en">This question</span><span class="zh">本题目录</span></h4>
+    <a href="#reqs"><span class="n">1</span> <span class="en">Clarify</span><span class="zh">澄清</span></a>
+    <a href="#est"><span class="n">2</span> <span class="en">Estimate</span><span class="zh">估算</span></a>
+    <a href="#api"><span class="n">3</span> API</a>
+    <a href="#data"><span class="n">4</span> <span class="en">Data model</span><span class="zh">数据模型</span></a>
+    <a href="#arch"><span class="n">5</span> <span class="en">Architecture</span><span class="zh">架构</span></a>
+    <a href="#deep"><span class="n">6</span> <span class="en">Deep dives</span><span class="zh">深挖</span></a>
+    <a href="#trade"><span class="n">7</span> <span class="en">Trade-offs</span><span class="zh">权衡</span></a>
+    <a href="#follow"><span class="n">8</span> <span class="en">Follow-ups</span><span class="zh">追问</span></a>
+    <h4><span class="en">Navigate</span><span class="zh">导航</span></h4>
+    <a href="06_product_search.html"><span class="n">←</span> 06 <span class="en">Search</span><span class="zh">搜索</span></a>
+    <a href="08_rate_limiter.html"><span class="n">→</span> 08 <span class="en">Rate Limiter</span><span class="zh">限流</span></a>
+  </nav>
+
+  <main class="content">
+    <div class="hero">
+      <div class="eyebrow">Tier 3 · Ecosystem · ★★★★☆</div>
+      <h1><span class="en">Design a Webhook &amp; Event Delivery System</span><span class="zh">设计 Webhook 与事件投递系统</span></h1>
+      <p>
+        <span class="en">"Shopify's app ecosystem relies on webhooks: when an order is placed, inventory changes, or a product updates,
+        deliver that event to thousands of third-party apps. <strong>A dropped webhook means a merchant's fulfillment or
+        accounting app silently misses an order.</strong> Design at-least-once delivery with retries, isolation, and HMAC security."</span>
+        <span class="zh">"Shopify 的应用生态系统依赖 Webhook：当订单创建、库存变动或商品更新时，将该事件投递给数千个第三方应用。<strong>一条丢失的 Webhook 意味着商家的履单或账务系统静默地漏掉了一笔订单。</strong>请设计一个支持 at-least-once 投递、重试、隔离和 HMAC 安全签名的系统。"</span>
+      </p>
+      <div class="meta">
+        <span class="chip"><span class="en">Seen: integration backbone / app partner framing</span><span class="zh">常见场景：集成骨干 / 应用合作伙伴</span></span>
+        <span class="chip"><span class="en">Tests: async reliability + fan-out at scale</span><span class="zh">考察：异步可靠性 + 大规模扇出</span></span>
+        <span class="chip">60 min</span>
+      </div>
+    </div>
+
+    <div class="callout callout--info">
+      <span class="ct"><span class="en">Why this question matters</span><span class="zh">为什么这道题重要</span></span>
+      <span class="en">Webhooks are the <strong>integration backbone</strong> of Shopify's partner ecosystem. The system must fan out one internal
+      event to potentially thousands of subscribed endpoints, retry failures gracefully, isolate a single dead subscriber from
+      affecting all others, and survive the event storm that a flash sale produces. The tricky parts — at-least-once semantics,
+      head-of-line blocking, ordering vs throughput — are exactly the distributed-systems tensions interviewers probe at senior and staff level.</span>
+      <span class="zh">Webhook 是 Shopify 合作伙伴生态的<strong>集成骨干</strong>。系统需要将一个内部事件扇出给潜在的数千个订阅端点，优雅地重试失败，隔离单个宕掉的订阅者使其不影响其他端点，并在抢购引发的事件风暴中保持稳定。其中的难点——at-least-once 语义、队头阻塞、顺序性 vs 吞吐量——正是面试官在 senior/staff 级别着重探查的分布式系统张力。</span>
+    </div>
+
+    <!-- 1 CLARIFY -->
+    <section class="step" id="reqs" data-accent="req">
+      <div class="step-head"><span class="step-num">1</span><h2><span class="en">Clarify requirements</span><span class="zh">澄清需求</span></h2><span class="sub"><span class="en">~7 min · ask, don't assume</span><span class="zh">~7 分钟 · 先问再设计</span></span></div>
+      <div class="req-grid">
+        <div class="box fn">
+          <h4><span class="en">Functional</span><span class="zh">功能性需求</span></h4>
+          <ul>
+            <li><span class="en">Register / unregister webhook subscriptions: <strong>shop, topic, endpoint URL, shared secret</strong>.</span><span class="zh">注册 / 取消 Webhook 订阅：<strong>shop、topic、端点 URL、共享密钥</strong>。</span></li>
+            <li><span class="en">Ingest internal domain events (order created, inventory changed, product updated, etc.).</span><span class="zh">摄入内部领域事件（订单创建、库存变动、商品更新等）。</span></li>
+            <li><span class="en">Deliver an <strong>HTTP POST</strong> to each matching subscriber endpoint.</span><span class="zh">向每个匹配的订阅端点发送 <strong>HTTP POST</strong>。</span></li>
+            <li><span class="en">Retry failed deliveries with back-off; dead-letter after max attempts.</span><span class="zh">对失败投递进行退避重试；达到最大重试次数后进入死信队列。</span></li>
+            <li><span class="en">Merchants and apps can <strong>inspect delivery status</strong> and trigger manual redelivery.</span><span class="zh">商家和应用可<strong>查看投递状态</strong>并手动触发重新投递。</span></li>
+          </ul>
+        </div>
+        <div class="box nfr">
+          <h4><span class="en">Non-functional</span><span class="zh">非功能性需求</span></h4>
+          <ul>
+            <li><span class="en"><strong>At-least-once delivery</strong> — never silently drop; consumers must deduplicate.</span><span class="zh"><strong>至少一次投递</strong>——绝不静默丢弃；消费者必须自行去重。</span></li>
+            <li><span class="en">Per-shop/per-topic ordering is "good enough" rather than globally strict.</span><span class="zh">按店/按主题的顺序性"够用即可"，无需全局严格有序。</span></li>
+            <li><span class="en">High fan-out: one event × many subscriptions must not bottleneck the hot path.</span><span class="zh">高扇出：一个事件 × 多个订阅不得成为热路径瓶颈。</span></li>
+            <li><span class="en"><strong>Isolation</strong> — one dead endpoint must not delay deliveries to healthy ones (no head-of-line blocking).</span><span class="zh"><strong>隔离性</strong>——一个宕掉的端点不得延迟对健康端点的投递（无队头阻塞）。</span></li>
+            <li><span class="en">Security: <strong>HMAC-SHA256</strong> signing, replay protection, HTTPS only.</span><span class="zh">安全性：<strong>HMAC-SHA256</strong> 签名、防重放攻击、仅允许 HTTPS。</span></li>
+            <li><span class="en">Back-pressure during event storms (flash sale order burst).</span><span class="zh">事件风暴期间（抢购订单突发）的背压处理。</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Clarifying questions to ask out loud</span><span class="zh">需大声说出的澄清问题</span></span>
+        <ul style="margin:6px 0 0;">
+          <li><span class="en">Delivery guarantee: at-least-once (realistic) or exactly-once (requires end-to-end transactional infrastructure and subscriber cooperation)?</span><span class="zh">投递保证：至少一次（现实可行）还是精确一次（需要端到端事务性基础设施和订阅者配合）？</span></li>
+          <li><span class="en">Is per-shop/per-topic <strong>strict ordering</strong> required, or "mostly ordered"? This changes the queue topology dramatically.</span><span class="zh">是否需要按店/按主题<strong>严格有序</strong>，还是"基本有序"即可？这会极大地改变队列拓扑。</span></li>
+          <li><span class="en">Expected events/sec and average fan-out factor? (Determines whether per-subscription or per-endpoint queues are needed.)</span><span class="zh">预期每秒事件数及平均扇出倍数是多少？（决定是否需要按订阅/按端点独立队列。）</span></li>
+          <li><span class="en">How to treat chronically failing endpoints — disable after N failures? Alert the merchant?</span><span class="zh">如何处理长期失败的端点——N 次失败后禁用？通知商家？</span></li>
+          <li><span class="en">Push (webhooks) vs. pull (polling API / managed bus like Amazon EventBridge)? Start with push; mention pull as an alternative.</span><span class="zh">推送（Webhook）还是拉取（轮询 API / 托管消息总线如 Amazon EventBridge）？先设计推送，再提拉取作为备选。</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2 ESTIMATE -->
+    <section class="step" id="est" data-accent="est">
+      <div class="step-head"><span class="step-num">2</span><h2><span class="en">Capacity estimation</span><span class="zh">容量估算</span></h2><span class="sub"><span class="en">find the bottleneck — it's fan-out, not ingestion</span><span class="zh">找出瓶颈——是扇出，不是摄入</span></span></div>
+      <p><span class="en">The core insight: ingesting domain events is cheap; the <strong>fan-out multiplier</strong> is what drives total delivery volume.
+      One popular topic subscribed by 5,000 apps turns a modest event rate into a massive delivery rate.</span><span class="zh">核心洞察：摄入领域事件成本低廉；驱动总投递量的是<strong>扇出倍数</strong>。一个被 5000 个应用订阅的热门主题，会把适中的事件速率放大成海量的投递请求。</span></p>
+      <div class="kpis">
+        <div class="kpi"><div class="v">~5k</div><div class="l"><span class="en">internal events/sec (orders + inventory + products at peak)</span><span class="zh">内部事件/秒（峰值：订单+库存+商品）</span></div></div>
+        <div class="kpi"><div class="v">×20</div><div class="l"><span class="en">avg subscriptions per event (fan-out factor)</span><span class="zh">每事件平均订阅数（扇出倍数）</span></div></div>
+        <div class="kpi"><div class="v">~100k</div><div class="l"><span class="en">delivery attempts/sec after fan-out</span><span class="zh">扇出后投递尝试/秒</span></div></div>
+        <div class="kpi"><div class="v">×1.4</div><div class="l"><span class="en">retry amplification (transient failures add ~40% volume)</span><span class="zh">重试放大系数（瞬时失败增加约 40% 流量）</span></div></div>
+      </div>
+      <ul>
+        <li><span class="en">At peak (BFCM / flash sale), the order topic alone may spike to <strong>50k events/sec</strong>; with fan-out, that is 1M+ delivery tasks/sec — must be buffered via Kafka, not handled in-process.</span><span class="zh">在峰值期间（黑五 / 抢购），仅订单主题就可能突增至 <strong>5 万事件/秒</strong>；经扇出后达到 100 万+投递任务/秒——必须通过 Kafka 缓冲，不能在进程内直接处理。</span></li>
+        <li><span class="en">A 48-hour retry window means a delivery in the DLQ may be re-attempted up to <em>days</em> later; <strong>storage for pending deliveries</strong> matters: estimate ~10 KB per payload × 100k/s × 30 s TTL-in-flight ≈ ~30 GB of queue depth.</span><span class="zh">48 小时重试窗口意味着 DLQ 中的投递最多数天后才重试；<strong>待投递消息的存储</strong>至关重要：估算约 10 KB/payload × 10 万/秒 × 30 秒在途 TTL ≈ 约 30 GB 队列深度。</span></li>
+        <li><span class="en">Per-endpoint circuit breakers amortize retries — a dead endpoint with 1k subscriptions should not trigger 1k parallel retry storms against itself every minute.</span><span class="zh">按端点的熔断器可分散重试压力——一个拥有 1000 个订阅的宕机端点，不应每分钟对自身触发 1000 次并行重试风暴。</span></li>
+      </ul>
+      <div class="callout callout--staff">
+        <span class="ct"><span class="en">Staff signal</span><span class="zh">Staff 信号</span></span>
+        <span class="en">State explicitly: <em>"The hard problem is not ingesting events — it is fan-out isolation. I need to ensure that the delivery path for one slow or dead endpoint does not create back-pressure on deliveries to healthy endpoints."</em></span>
+        <span class="zh">明确说出：<em>"难点不在于摄入事件——而在于扇出隔离。我需要确保一个慢速或宕机端点的投递路径，不会对健康端点的投递造成背压。"</em></span>
+      </div>
+    </section>
+
+    <!-- 3 API -->
+    <section class="step" id="api" data-accent="api">
+      <div class="step-head"><span class="step-num">3</span><h2><span class="en">API design</span><span class="zh">API 设计</span></h2></div>
+      <h4><span class="en">Registration (merchant / app developer)</span><span class="zh">订阅注册（商家 / 应用开发者）</span></h4>
+      <div class="api">
+        <div class="row"><span class="method post">POST</span><span class="path">/webhooks</span><span class="desc">{shop_id, topic, address, secret} → {id, created_at}</span></div>
+        <div class="row"><span class="method del">DEL</span><span class="path">/webhooks/{id}</span><span class="desc"><span class="en">unregister subscription</span><span class="zh">取消订阅</span></span></div>
+        <div class="row"><span class="method get">GET</span><span class="path">/webhooks/{id}/deliveries</span><span class="desc">{state, attempts, last_status_code, next_retry_at}</span></div>
+        <div class="row"><span class="method post">POST</span><span class="path">/webhooks/{id}/deliveries/{deliveryId}/redeliver</span><span class="desc"><span class="en">force manual retry from dashboard</span><span class="zh">从 Dashboard 强制手动重试</span></span></div>
+      </div>
+      <h4><span class="en">Outbound delivery (what subscribers receive)</span><span class="zh">出站投递（订阅者收到的内容）</span></h4>
+      <div class="api">
+        <div class="row"><span class="method post">POST</span><span class="path">{subscriber-address}</span><span class="desc"><span class="en">HTTP POST to registered endpoint; 200 = ack</span><span class="zh">HTTP POST 到已注册端点；200 = 确认</span></span></div>
+      </div>
+      <p><span class="en">Required outbound headers on every delivery:</span><span class="zh">每次投递必须携带的出站请求头：</span></p>
+      <div class="api">
+        <div class="row"><span class="method get">HDR</span><span class="path">X-Shopify-Topic</span><span class="desc">e.g. orders/create</span></div>
+        <div class="row"><span class="method get">HDR</span><span class="path">X-Shopify-Hmac-SHA256</span><span class="desc">base64(HMAC-SHA256(secret, body))</span></div>
+        <div class="row"><span class="method get">HDR</span><span class="path">X-Shopify-Webhook-Id</span><span class="desc">globally unique delivery ID for idempotency</span></div>
+        <div class="row"><span class="method get">HDR</span><span class="path">X-Shopify-Delivered-At</span><span class="desc">ISO timestamp; subscriber can detect replays</span></div>
+      </div>
+    </section>
+
+    <!-- 4 DATA MODEL -->
+    <section class="step" id="data" data-accent="data">
+      <div class="step-head"><span class="step-num">4</span><h2><span class="en">Data model</span><span class="zh">数据模型</span></h2></div>
+      <pre><code><span class="c">-- Subscription registry (relational — Postgres)</span>
+<span class="k">subscription</span>(id PK, shop_id, topic, address, secret_hash,
+             status [ACTIVE|PAUSED|DISABLED], created_at, updated_at,
+             <span class="c">INDEX (shop_id, topic)</span>)
+
+<span class="c">-- Immutable event log (append-only)</span>
+<span class="k">event</span>(id PK, shop_id, topic, payload JSONB, created_at,
+      <span class="c">UNIQUE(shop_id, topic, idempotency_key)</span>)
+
+<span class="c">-- Delivery tracking (one row per event × subscription)</span>
+<span class="k">delivery</span>(id PK, event_id FK, subscription_id FK,
+         state [PENDING|IN_FLIGHT|DELIVERED|FAILED|DLQ],
+         attempts INT DEFAULT 0,
+         next_retry_at TIMESTAMP,
+         last_status_code SMALLINT,
+         last_error TEXT,
+         <span class="c">INDEX (state, next_retry_at)   -- retry scheduler scan</span>
+         <span class="c">INDEX (subscription_id, state)  -- per-endpoint circuit breaker</span>)</code></pre>
+      <p><span class="en"><strong>Note on idempotency:</strong> <code>X-Shopify-Webhook-Id</code> = <code>delivery.id</code>. Subscribers store this header value
+      in a seen-IDs set (Redis or DB) and skip processing if already observed. This is the practical contract for at-least-once:
+      Shopify guarantees delivery; subscribers guarantee idempotent handling.</span><span class="zh"><strong>幂等性说明：</strong><code>X-Shopify-Webhook-Id</code> = <code>delivery.id</code>。订阅者将此请求头值存入已处理 ID 集合（Redis 或数据库），如已存在则跳过处理。这是 at-least-once 的实际契约：Shopify 保证投递；订阅者保证幂等处理。</span></p>
+    </section>
+
+    <!-- 5 ARCHITECTURE -->
+    <section class="step" id="arch" data-accent="arch">
+      <div class="step-head"><span class="step-num">5</span><h2><span class="en">High-level architecture</span><span class="zh">高层架构</span></h2><span class="sub"><span class="en">event bus → fan-out → per-endpoint isolation</span><span class="zh">事件总线 → 扇出 → 按端点隔离</span></span></div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 820 580" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Arial,sans-serif">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+            </marker>
+            <marker id="ahd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#ea580c"/>
+            </marker>
+          </defs>
+
+          <!-- DOMAIN SERVICES (top-left) -->
+          <rect x="20" y="20" width="160" height="50" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+          <text x="100" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Domain Services</text>
+          <text x="100" y="58" text-anchor="middle" font-size="10.5" fill="#64748b">orders · inventory · products</text>
+
+          <!-- KAFKA (internal event bus, center-top) -->
+          <rect x="300" y="20" width="200" height="50" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="400" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Kafka — internal event bus</text>
+          <text x="400" y="58" text-anchor="middle" font-size="10.5" fill="#ea580c">partitioned by shop_id</text>
+
+          <!-- FAN-OUT SERVICE -->
+          <rect x="300" y="130" width="200" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="400" y="152" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Fan-out Service</text>
+          <text x="400" y="169" text-anchor="middle" font-size="10.5" fill="#008060">event × matching subscriptions</text>
+
+          <!-- SUBSCRIPTION DB -->
+          <rect x="590" y="130" width="200" height="54" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="690" y="152" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Subscription DB</text>
+          <text x="690" y="169" text-anchor="middle" font-size="10.5" fill="#7c3aed">Postgres + cache</text>
+
+          <!-- PER-ENDPOINT QUEUES (center) -->
+          <rect x="300" y="250" width="200" height="54" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="400" y="272" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">Per-endpoint Queues</text>
+          <text x="400" y="289" text-anchor="middle" font-size="10.5" fill="#ea580c">one queue per subscription</text>
+
+          <!-- DELIVERY WORKERS -->
+          <rect x="300" y="370" width="200" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="400" y="392" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Delivery Workers</text>
+          <text x="400" y="409" text-anchor="middle" font-size="10.5" fill="#008060">HTTP POST + HMAC sign</text>
+
+          <!-- RETRY SCHEDULER -->
+          <rect x="590" y="370" width="200" height="54" rx="9" fill="#ecfdf5" stroke="#008060" stroke-width="1.5"/>
+          <text x="690" y="392" text-anchor="middle" font-size="13" font-weight="700" fill="#04684f">Retry Scheduler</text>
+          <text x="690" y="409" text-anchor="middle" font-size="10.5" fill="#008060">backoff re-enqueue</text>
+
+          <!-- DLQ -->
+          <rect x="590" y="490" width="200" height="50" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="690" y="512" text-anchor="middle" font-size="13" font-weight="700" fill="#c2410c">DLQ</text>
+          <text x="690" y="528" text-anchor="middle" font-size="10.5" fill="#ea580c">exhausted deliveries</text>
+
+          <!-- DELIVERY STATUS STORE -->
+          <rect x="30" y="370" width="190" height="54" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="125" y="392" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Delivery Status Store</text>
+          <text x="125" y="409" text-anchor="middle" font-size="10.5" fill="#7c3aed">delivery table + merchant UI</text>
+
+          <!-- EXTERNAL SUBSCRIBER ENDPOINTS -->
+          <rect x="300" y="490" width="200" height="50" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+          <text x="400" y="512" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Subscriber Endpoints</text>
+          <text x="400" y="528" text-anchor="middle" font-size="10.5" fill="#64748b">third-party app servers</text>
+
+          <!-- ARROWS -->
+          <!-- domain → kafka -->
+          <line x1="180" y1="45" x2="298" y2="45" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- kafka → fan-out -->
+          <line x1="400" y1="70" x2="400" y2="128" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- fan-out → sub DB (lookup) -->
+          <line x1="500" y1="157" x2="588" y2="157" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- fan-out → per-endpoint queues -->
+          <line x1="400" y1="184" x2="400" y2="248" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- per-endpoint queues → delivery workers -->
+          <line x1="400" y1="304" x2="400" y2="368" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- delivery workers → subscriber endpoints -->
+          <line x1="400" y1="424" x2="400" y2="488" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- delivery workers → delivery status store -->
+          <line x1="300" y1="397" x2="222" y2="397" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- delivery workers → retry scheduler (on fail) -->
+          <line x1="500" y1="397" x2="588" y2="397" stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+          <!-- retry scheduler → per-endpoint queues (re-enqueue, dashed) -->
+          <path d="M690,370 L690,310 L502,310 L502,276" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)"/>
+          <!-- retry scheduler → DLQ (exhausted) -->
+          <line x1="690" y1="424" x2="690" y2="488" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ahd)"/>
+
+          <!-- inline labels -->
+          <text x="240" y="40" font-size="10" fill="#94a3b8">emit events</text>
+          <text x="412" y="107" font-size="10" fill="#ea580c">consume</text>
+          <text x="540" y="148" font-size="10" fill="#94a3b8">lookup subscriptions</text>
+          <text x="412" y="230" font-size="10" fill="#ea580c">enqueue tasks</text>
+          <text x="412" y="350" font-size="10" fill="#94a3b8">dequeue</text>
+          <text x="412" y="470" font-size="10" fill="#64748b">HTTP POST</text>
+          <text x="240" y="392" font-size="10" fill="#7c3aed">write status</text>
+          <text x="510" y="392" font-size="10" fill="#ea580c">on failure</text>
+          <text x="595" y="305" font-size="10" fill="#ea580c">re-enqueue (backoff)</text>
+          <text x="700" y="460" font-size="10" fill="#ea580c">exhausted</text>
+        </svg>
+
+        <div class="legend">
+          <span><i style="background:#64748b"></i> client / external</span>
+          <span><i style="background:#008060"></i> service</span>
+          <span><i style="background:#dc2626"></i> cache</span>
+          <span><i style="background:#7c3aed"></i> datastore</span>
+          <span><i style="background:#ea580c"></i> async / queue</span>
+        </div>
+        <div class="cap"><span class="en">Domain events flow into Kafka → Fan-out Service expands per subscription → per-endpoint queues isolate subscribers → Delivery Workers POST + HMAC sign → Retry Scheduler back-fills failures → DLQ for exhausted deliveries.</span><span class="zh">领域事件流入 Kafka → Fan-out Service 按订阅展开 → per-endpoint 队列隔离各订阅者 → Delivery Worker 发送 HTTP POST 并 HMAC 签名 → Retry Scheduler 回填失败任务 → 耗尽重试后进入 DLQ。</span></div>
+      </div>
+
+      <h4><span class="en">Component walk-through</span><span class="zh">组件逐项解析</span></h4>
+      <ul>
+        <li><span class="en"><strong>Domain Services</strong> emit internal events to Kafka, partitioned by <code>shop_id</code> for coarse ordering and load distribution.</span><span class="zh"><strong>领域服务</strong>向 Kafka 发出内部事件，按 <code>shop_id</code> 分区以实现粗粒度有序和负载分散。</span></li>
+        <li><span class="en"><strong>Fan-out Service</strong> consumes from Kafka, looks up active subscriptions for each (shop, topic) pair, and enqueues one delivery task per matching subscription. This is the only place fan-out amplification occurs — keeping it a single async boundary prevents synchronous fan-out from blocking the order pipeline.</span><span class="zh"><strong>Fan-out Service</strong> 从 Kafka 消费，为每个 (shop, topic) 对查找活跃订阅，并为每个匹配订阅入队一个投递任务。扇出放大只发生在这一处——将其保持为单一异步边界，可防止同步扇出阻塞订单管道。</span></li>
+        <li><span class="en"><strong>Per-endpoint Queues</strong> (one logical queue per subscription) are the isolation boundary. A slow or dead endpoint builds a backlog only in its own queue; other endpoints are unaffected.</span><span class="zh"><strong>Per-endpoint 队列</strong>（每个订阅一条逻辑队列）是隔离边界。慢速或宕机的端点只会在自己的队列中积压；其他端点不受影响。</span></li>
+        <li><span class="en"><strong>Delivery Workers</strong> pull from endpoint queues, sign the payload with HMAC-SHA256, and POST to the subscriber. A 2xx response ACKs delivery. Non-2xx or connection errors hand the task to the Retry Scheduler.</span><span class="zh"><strong>投递 Worker</strong> 从端点队列拉取任务，用 HMAC-SHA256 对 payload 签名，然后 POST 给订阅者。2xx 响应视为投递确认；非 2xx 或连接错误则将任务交给 Retry Scheduler。</span></li>
+        <li><span class="en"><strong>Retry Scheduler</strong> applies exponential back-off + jitter and re-enqueues at the computed <code>next_retry_at</code>. After max attempts (e.g. 19 retries over 48 hours), the delivery moves to the DLQ.</span><span class="zh"><strong>Retry Scheduler</strong> 应用指数退避 + 抖动，在计算出的 <code>next_retry_at</code> 时重新入队。达到最大重试次数（例如 48 小时内重试 19 次）后，投递进入 DLQ。</span></li>
+        <li><span class="en"><strong>DLQ</strong> stores exhausted deliveries. Merchants inspect these in the dashboard and can trigger manual redelivery.</span><span class="zh"><strong>DLQ</strong> 存储已耗尽重试的投递。商家可在 Dashboard 中查看并手动触发重新投递。</span></li>
+        <li><span class="en"><strong>Delivery Status Store</strong> (the <code>delivery</code> table) is updated on every attempt for the merchant dashboard and monitoring.</span><span class="zh"><strong>投递状态存储</strong>（<code>delivery</code> 表）在每次尝试后更新，供商家 Dashboard 和监控使用。</span></li>
+      </ul>
+    </section>
+
+    <!-- 6 DEEP DIVES -->
+    <section class="step" id="deep" data-accent="deep">
+      <div class="step-head"><span class="step-num">6</span><h2><span class="en">Deep dives</span><span class="zh">深挖</span></h2><span class="sub"><span class="en">where staff signal lives</span><span class="zh">Staff 信号所在之处</span></span></div>
+
+      <h3>① <span class="en">At-least-once delivery and consumer idempotency</span><span class="zh">At-least-once 投递与消费者幂等性</span></h3>
+      <p><span class="en">Shopify's honest contract is <strong>at-least-once</strong>: we guarantee every event is delivered at least once, and subscribers
+      must deduplicate via <code>X-Shopify-Webhook-Id</code>. Exactly-once over HTTP to arbitrary third-party endpoints is impractical —
+      it requires the subscriber to participate in a two-phase protocol (e.g. transactional outbox + subscriber-side idempotency key
+      in a database), and we have no control over subscriber infrastructure. The correct frame is: <em>Shopify retries until it gets
+      a 2xx; the subscriber checks whether it has already processed this delivery ID before acting.</em></span><span class="zh">Shopify 诚实的契约是 <strong>at-least-once</strong>：我们保证每个事件至少投递一次，订阅者必须通过 <code>X-Shopify-Webhook-Id</code> 自行去重。对任意第三方端点在 HTTP 上实现精确一次不现实——它要求订阅者参与两阶段协议（例如 transactional outbox + 订阅者侧的幂等键入库），而我们无法控制订阅者的基础设施。正确的表述是：<em>Shopify 重试直到收到 2xx；订阅者在处理前检查是否已处理过该投递 ID。</em></span></p>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Why exactly-once over HTTP is impractical</span><span class="zh">为何 HTTP 上的精确一次不现实</span></span>
+        <span class="en">Even with an idempotent HTTP method, network partitions mean a 2xx ACK can be lost after the subscriber has already processed
+        the event. Without a distributed transaction that spans both sides of the HTTP call — which requires subscriber cooperation and
+        infrastructure we cannot mandate — exactly-once is not achievable. At-least-once + subscriber-side deduplication is the
+        industry-standard contract for webhook systems (Stripe, GitHub, Shopify all use it).</span>
+        <span class="zh">即使使用幂等的 HTTP 方法，网络分区也意味着订阅者已处理事件后 2xx ACK 可能丢失。如果没有跨越 HTTP 调用两端的分布式事务——而这需要订阅者配合和我们无法强制要求的基础设施——精确一次就无法实现。At-least-once + 订阅者侧去重是 Webhook 系统的行业标准契约（Stripe、GitHub、Shopify 均采用此方案）。</span>
+      </div>
+
+      <h3>② <span class="en">Retry strategy with exponential back-off</span><span class="zh">指数退避重试策略</span></h3>
+      <p><span class="en">Each failed delivery is scheduled for a retry after an exponentially increasing delay, plus random jitter to prevent
+      synchronized retry storms when a subscriber comes back online after an outage. The retry schedule is stored as
+      <code>delivery.next_retry_at</code>; a polling scheduler runs every few seconds to enqueue due deliveries.</span><span class="zh">每次投递失败后，按指数递增的延迟安排重试，并加入随机抖动，以防止订阅者故障恢复上线时出现同步重试风暴。重试计划存储为 <code>delivery.next_retry_at</code>；轮询调度器每隔几秒运行一次，将到期的投递重新入队。</span></p>
+      <pre><code><span class="c">-- Retry schedule (attempts → delay before next try)</span>
+attempt 1  : immediately (first try)
+attempt 2  : 1 min  + jitter(0–30s)
+attempt 3  : 5 min  + jitter(0–60s)
+attempt 4  : 15 min + jitter(0–120s)
+attempt 5  : 1 hr   + jitter(0–5min)
+attempt 6  : 3 hr   + jitter(0–15min)
+...
+attempt 19 : ~24 hr + jitter  <span class="c">→ total window ~48 hr</span>
+attempt 20 : state = DLQ, merchant alerted
+
+<span class="c">-- Formula: delay_i = min(cap, base × 2^i) + rand(0, jitter_cap)</span>
+<span class="c">-- base=60s, cap=86400s (1 day), jitter_cap=0.2×delay_i</span></code></pre>
+      <p><span class="en">Merchants can trigger <strong>manual redelivery</strong> from the dashboard at any point, including for DLQ entries, via
+      <code>POST /webhooks/{id}/deliveries/{deliveryId}/redeliver</code>. This re-enqueues the task and resets the attempt counter.</span><span class="zh">商家可随时从 Dashboard 触发<strong>手动重新投递</strong>，包括 DLQ 中的条目，通过 <code>POST /webhooks/{id}/deliveries/{deliveryId}/redeliver</code>。这会将任务重新入队并重置重试计数器。</span></p>
+
+      <h3>③ <span class="en">Isolation — eliminating head-of-line blocking</span><span class="zh">隔离——消除队头阻塞</span></h3>
+      <p><span class="en">The single most important architectural decision is <strong>per-endpoint queues</strong>. If all deliveries for all
+      subscriptions share one queue, a subscriber whose endpoint is down or responding in 30 s will cause all deliveries
+      behind it to wait — the classic head-of-line blocking problem.</span><span class="zh">最重要的架构决策是采用 <strong>per-endpoint 队列</strong>。如果所有订阅的所有投递共用一个队列，某个端点宕机或响应需 30 秒，就会导致其后所有投递等待——这是经典的队头阻塞问题。</span></p>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Danger: shared queue causes global backlog</span><span class="zh">风险：共享队列导致全局积压</span></span>
+        <span class="en">With a single delivery queue, one endpoint that takes 30 seconds to time out will consume worker threads and back up
+        deliveries for all other healthy subscribers. During an event storm, this cascades: a single dead endpoint can cause
+        the entire delivery pipeline to stall for minutes, impacting thousands of merchants whose subscribers are perfectly healthy.
+        <strong>Per-endpoint queues are non-negotiable for isolation.</strong></span>
+        <span class="zh">在单一投递队列中，一个超时需 30 秒的端点会占用 Worker 线程，并阻塞所有其他健康订阅者的投递。在事件风暴期间，这会产生级联效应：单个宕机端点可能导致整个投递管道停滞数分钟，影响数千个订阅者完全健康的商家。<strong>Per-endpoint 队列对于隔离而言是不可妥协的。</strong></span>
+      </div>
+      <p><span class="en">Additional isolation measures:</span><span class="zh">额外的隔离措施：</span></p>
+      <ul>
+        <li><span class="en"><strong>Per-endpoint circuit breaker</strong>: after N consecutive failures, open the circuit and skip the endpoint for a
+        cool-down period. Re-probe with a single request (half-open state) before resuming. Deliveries during the open state are
+        queued normally but the worker short-circuits without attempting HTTP, preserving worker throughput.</span><span class="zh"><strong>Per-endpoint 熔断器</strong>：连续 N 次失败后断开熔断，在冷却期内跳过该端点。恢复前用单次请求探测（半开状态）。断路期间投递正常入队，但 Worker 短路跳过 HTTP 请求，保持 Worker 吞吐量。</span></li>
+        <li><span class="en"><strong>Per-endpoint rate limiting</strong>: prevent delivery workers from hammering a recovering subscriber with the
+        backlog all at once. Drain the queue at a controlled rate after the circuit closes.</span><span class="zh"><strong>Per-endpoint 速率限制</strong>：防止投递 Worker 在熔断恢复后将积压的请求一次性砸向正在恢复的订阅者。熔断关闭后以受控速率消费队列。</span></li>
+        <li><span class="en"><strong>Worker pool partitioning</strong>: optionally dedicate a worker pool to high-volume topics to prevent
+        low-volume endpoints from being starved during peaks.</span><span class="zh"><strong>Worker 池分区</strong>：可选地为高流量主题分配专用 Worker 池，防止低流量端点在峰值期间被饿死。</span></li>
+      </ul>
+
+      <h3>④ <span class="en">Ordering — per-shop/per-topic vs. throughput</span><span class="zh">顺序性——按店/按主题 vs. 吞吐量</span></h3>
+      <p><span class="en">Strict global ordering across all subscriptions is too expensive. The practical approach: use Kafka partitions keyed by
+      <code>shop_id</code> for the event bus, giving coarse per-shop ordering at the ingestion layer. Within fan-out, enqueue
+      delivery tasks in partition order. Delivery workers process a subscription's queue serially (one in-flight at a time) to
+      maintain topic-level ordering for that endpoint.</span><span class="zh">跨所有订阅的严格全局顺序代价太高。实际做法：事件总线使用以 <code>shop_id</code> 为键的 Kafka 分区，在摄入层实现粗粒度的按店有序。在扇出阶段，按分区顺序将投递任务入队。投递 Worker 串行处理订阅队列（同一时刻只有一条在途），以维护该端点的主题级顺序。</span></p>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Ordering level</span><span class="zh">顺序级别</span></th><th><span class="en">How achieved</span><span class="zh">实现方式</span></th><th><span class="en">Cost</span><span class="zh">代价</span></th><th><span class="en">When to use</span><span class="zh">适用场景</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">None (default)</span><span class="zh">无顺序（默认）</span></td>
+            <td><span class="en">Multiple workers per subscription, no ordering constraint</span><span class="zh">每个订阅多个 Worker，无顺序约束</span></td>
+            <td><span class="en">Lowest; maximum parallel throughput</span><span class="zh">最低；最大并行吞吐</span></td>
+            <td><span class="en">Most use cases — app business logic is idempotent anyway</span><span class="zh">大多数场景——应用业务逻辑本就是幂等的</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Per-shop ordering</span><span class="zh">按店顺序</span></td>
+            <td><span class="en">Kafka partition key = shop_id</span><span class="zh">Kafka 分区键 = shop_id</span></td>
+            <td><span class="en">Near-zero; free from partitioning</span><span class="zh">近零；分区自带</span></td>
+            <td><span class="en">Default recommendation; good enough for most apps</span><span class="zh">默认推荐；对大多数应用足够</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Per-subscription ordering</span><span class="zh">按订阅顺序</span></td>
+            <td><span class="en">Single consumer per subscription queue; one in-flight delivery at a time</span><span class="zh">每个订阅队列单一消费者；同时只有一条在途投递</span></td>
+            <td><span class="en">Reduces parallelism; back-pressure propagates</span><span class="zh">降低并发度；背压传播</span></td>
+            <td><span class="en">Use only when app logic is order-sensitive (e.g. inventory ledger)</span><span class="zh">仅在应用逻辑对顺序敏感时使用（如库存账本）</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Strict global ordering</span><span class="zh">严格全局顺序</span></td>
+            <td><span class="en">Global single-consumer Kafka topic; fan-out before acknowledgment</span><span class="zh">全局单消费者 Kafka 主题；确认前扇出</span></td>
+            <td><span class="en">Hard throughput cap = single consumer rate; not scalable</span><span class="zh">吞吐量硬上限 = 单消费者速率；不可扩展</span></td>
+            <td><span class="en">Avoid; no real use case requires this for webhooks</span><span class="zh">避免使用；Webhook 没有真正需要此模式的场景</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>⑤ <span class="en">Security — HMAC signing and replay protection</span><span class="zh">安全性——HMAC 签名与防重放攻击</span></h3>
+      <p><span class="en">Each subscription has a <strong>per-subscription secret</strong> (random 32-byte value, stored hashed in the DB, transmitted
+      to the app owner once at registration). The delivery worker computes:</span><span class="zh">每个订阅拥有一个<strong>按订阅独立的密钥</strong>（32 字节随机值，在数据库中存储其哈希值，在注册时一次性传给应用所有者）。投递 Worker 计算：</span></p>
+      <pre><code>signature = base64( HMAC-SHA256( subscription.secret, request_body ) )
+header:  X-Shopify-Hmac-SHA256: &lt;signature&gt;</code></pre>
+      <p><span class="en">Subscribers verify the signature against their stored secret before processing the payload. This authenticates origin
+      (only Shopify knows the secret) and payload integrity (any tampering invalidates the HMAC).</span><span class="zh">订阅者在处理 payload 前用其存储的密钥验证签名。这既验证了来源（只有 Shopify 知道密钥），也验证了 payload 完整性（任何篡改都会使 HMAC 失效）。</span></p>
+      <p><span class="en"><strong>Replay protection</strong>: include <code>X-Shopify-Delivered-At</code> (ISO timestamp). Subscribers reject any
+      delivery where the timestamp is more than 5 minutes old. Combined with the delivery ID in <code>X-Shopify-Webhook-Id</code>,
+      this prevents both replay attacks and duplicate processing.</span><span class="zh"><strong>防重放攻击</strong>：附带 <code>X-Shopify-Delivered-At</code>（ISO 时间戳）。订阅者拒绝时间戳超过 5 分钟的投递。结合 <code>X-Shopify-Webhook-Id</code> 中的投递 ID，可同时防止重放攻击和重复处理。</span></p>
+      <p><span class="en">Additional security controls: HTTPS only (reject non-TLS endpoint addresses at registration); ownership verification
+      at registration time via a challenge-response or DNS token (so apps cannot register a subscription pointing at a competitor's
+      endpoint).</span><span class="zh">额外安全控制：仅允许 HTTPS（注册时拒绝非 TLS 端点地址）；注册时通过挑战-响应或 DNS token 验证端点所有权（防止应用将订阅注册到竞争对手的端点）。</span></p>
+
+      <h3>⑥ <span class="en">Event storms and back-pressure</span><span class="zh">事件风暴与背压</span></h3>
+      <p><span class="en">A BFCM flash sale can produce a 50× spike in <code>orders/create</code> events. The design handles this at three layers:</span><span class="zh">黑五抢购可使 <code>orders/create</code> 事件产生 50 倍尖峰。该设计从三个层面应对：</span></p>
+      <ul>
+        <li><span class="en"><strong>Kafka buffer</strong>: the event bus absorbs the spike asynchronously. The Fan-out Service consumes at its own pace;
+        Kafka retention ensures no events are lost during the burst. Consumer lag is the observable metric — alert if it exceeds a threshold.</span><span class="zh"><strong>Kafka 缓冲</strong>：事件总线异步吸收尖峰。Fan-out Service 按自身节奏消费；Kafka 保留策略确保突发期间不丢失事件。消费者 lag 是可观测的关键指标——超过阈值时告警。</span></li>
+        <li><span class="en"><strong>Worker autoscaling</strong>: delivery workers scale out on queue depth. Because queues are per-endpoint, autoscaling
+        is proportional to actual demand, not worst-case dead-endpoint scenarios.</span><span class="zh"><strong>Worker 自动扩容</strong>：投递 Worker 根据队列深度横向扩展。由于队列是 per-endpoint 的，自动扩容与实际需求成比例，而非按宕机端点的最坏情况配置。</span></li>
+        <li><span class="en"><strong>Per-shop fairness</strong>: the Fan-out Service applies a per-shop rate limit when enqueuing delivery tasks.
+        A single storming shop (e.g. a massive merchant's BFCM) cannot monopolize the delivery infrastructure and starve small
+        merchants with a few subscriptions. Fair-share scheduling across shop queues is the key mechanism.</span><span class="zh"><strong>按店公平性</strong>：Fan-out Service 在入队投递任务时应用按店速率限制。单个事件风暴的店铺（如某大商家的黑五）不能垄断投递基础设施，饿死只有少量订阅的小商家。跨店铺队列的公平份额调度是关键机制。</span></li>
+      </ul>
+      <div class="callout callout--warn">
+        <span class="ct"><span class="en">Back-pressure signals to expose</span><span class="zh">需暴露的背压信号</span></span>
+        <span class="en">Expose consumer lag (Kafka), per-endpoint queue depth, and delivery latency P99 as first-class metrics. If a shop's
+        deliveries are consistently delayed because of its own event volume, proactively alert the merchant and consider
+        increasing their subscription tier or batching events.</span>
+        <span class="zh">将消费者 lag（Kafka）、per-endpoint 队列深度和投递延迟 P99 作为一等指标暴露出来。如果某店铺的投递因自身事件量持续延迟，主动告知商家并考虑提升其订阅等级或对事件进行批量合并。</span>
+      </div>
+    </section>
+
+    <!-- 7 TRADE-OFFS -->
+    <section class="step" id="trade" data-accent="trade">
+      <div class="step-head"><span class="step-num">7</span><h2><span class="en">Trade-offs</span><span class="zh">权衡</span></h2></div>
+      <table class="tbl-trade">
+        <thead><tr><th><span class="en">Axis</span><span class="zh">维度</span></th><th><span class="en">Option A</span><span class="zh">方案 A</span></th><th><span class="en">Option B</span><span class="zh">方案 B</span></th><th><span class="en">Recommendation</span><span class="zh">推荐</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">Delivery guarantee</span><span class="zh">投递保证</span></td>
+            <td><span class="en"><strong>At-least-once</strong> — retry until 2xx; subscriber deduplicates</span><span class="zh"><strong>At-least-once</strong> — 重试直到 2xx；订阅者去重</span></td>
+            <td><span class="en"><strong>Exactly-once</strong> — requires distributed transaction spanning HTTP boundary; subscriber must cooperate</span><span class="zh"><strong>Exactly-once</strong> — 需要跨越 HTTP 边界的分布式事务；订阅者必须配合</span></td>
+            <td><span class="en">At-least-once is the only realistic choice. Document the contract; provide <code>X-Shopify-Webhook-Id</code> for deduplication.</span><span class="zh">At-least-once 是唯一现实的选择。明确契约文档；提供 <code>X-Shopify-Webhook-Id</code> 用于去重。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Queue topology</span><span class="zh">队列拓扑</span></td>
+            <td><span class="en"><strong>Per-endpoint queues</strong> — full isolation; one dead endpoint has zero impact on others</span><span class="zh"><strong>Per-endpoint 队列</strong> — 完全隔离；一个宕机端点对其他端点零影响</span></td>
+            <td><span class="en"><strong>Shared queue</strong> — simpler ops; one slow endpoint blocks all delivery behind it (head-of-line blocking)</span><span class="zh"><strong>共享队列</strong> — 运维简单；一个慢端点阻塞其后所有投递（队头阻塞）</span></td>
+            <td><span class="en">Per-endpoint queues. The isolation requirement is non-negotiable at Shopify's app ecosystem scale.</span><span class="zh">Per-endpoint 队列。在 Shopify 应用生态的规模下，隔离需求不可妥协。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Fan-out style</span><span class="zh">扇出方式</span></td>
+            <td><span class="en"><strong>Synchronous fan-out</strong> — fan-out inline during event handling; simpler; blocks the hot path if slow</span><span class="zh"><strong>同步扇出</strong> — 在事件处理时内联扇出；更简单；慢时阻塞热路径</span></td>
+            <td><span class="en"><strong>Async fan-out</strong> — Fan-out Service consumes from Kafka; decoupled; event producer never waits for delivery</span><span class="zh"><strong>异步扇出</strong> — Fan-out Service 从 Kafka 消费；解耦；事件生产者无需等待投递</span></td>
+            <td><span class="en">Async. The order pipeline must not wait for webhook delivery. Kafka decoupling is mandatory.</span><span class="zh">异步。订单管道绝不能等待 Webhook 投递。Kafka 解耦是必须的。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Ordering vs. throughput</span><span class="zh">顺序性 vs. 吞吐量</span></td>
+            <td><span class="en"><strong>Per-subscription serial delivery</strong> — strict per-shop/topic order; limits parallelism; one slow subscriber slows others on same partition</span><span class="zh"><strong>按订阅串行投递</strong> — 严格按店/按主题有序；限制并发度；一个慢订阅者会拖慢同分区的其他订阅者</span></td>
+            <td><span class="en"><strong>Unordered parallel delivery</strong> — maximum throughput; requires subscribers to be idempotent and order-tolerant</span><span class="zh"><strong>无序并行投递</strong> — 最大吞吐量；要求订阅者幂等且容忍乱序</span></td>
+            <td><span class="en">Per-shop coarse ordering via Kafka partitions; per-subscription ordering only when app contract requires it.</span><span class="zh">通过 Kafka 分区实现按店粗粒度有序；仅在应用契约明确要求时才启用按订阅有序。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Push vs. pull</span><span class="zh">推送 vs. 拉取</span></td>
+            <td><span class="en"><strong>Push webhooks</strong> — low latency; immediate delivery; no polling overhead; subscriber must be reachable</span><span class="zh"><strong>推送 Webhook</strong> — 低延迟；即时投递；无轮询开销；订阅者必须可达</span></td>
+            <td><span class="en"><strong>Pull API / managed bus</strong> (EventBridge, polling) — subscriber controls consumption rate; works behind firewalls</span><span class="zh"><strong>拉取 API / 托管消息总线</strong>（EventBridge、轮询）——订阅者控制消费速率；可在防火墙后工作</span></td>
+            <td><span class="en">Push for most apps (low latency, ecosystem standard). Offer pull as an opt-in for enterprise apps behind VPNs.</span><span class="zh">大多数应用用推送（低延迟、生态标准）。为 VPN 后的企业应用提供可选的拉取模式。</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">Retry aggressiveness</span><span class="zh">重试激进程度</span></td>
+            <td><span class="en"><strong>Aggressive retries</strong> (short back-off, many attempts) — fast recovery; subscriber may see thundering-herd on resume</span><span class="zh"><strong>激进重试</strong>（短退避、多次尝试）——恢复快；订阅者恢复时可能遭遇惊群效应</span></td>
+            <td><span class="en"><strong>Conservative retries</strong> (long back-off, rate-limited resume) — gentler on recovering subscribers; may delay re-delivery</span><span class="zh"><strong>保守重试</strong>（长退避、限速恢复）——对恢复中的订阅者更温和；可能延迟重新投递</span></td>
+            <td><span class="en">Exponential back-off + jitter + per-endpoint rate limiter on resume. Balances recovery speed with subscriber safety.</span><span class="zh">指数退避 + 抖动 + 恢复时 per-endpoint 速率限制。在恢复速度与订阅者安全之间取得平衡。</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 FOLLOW-UPS -->
+    <section class="step" id="follow" data-accent="follow">
+      <div class="step-head"><span class="step-num">8</span><h2><span class="en">Follow-up questions</span><span class="zh">追问</span></h2><span class="sub"><span class="en">click to expand</span><span class="zh">点击展开</span></span></div>
+      <div class="faq">
+        <details class="faq-item">
+          <summary><span class="en">A subscriber endpoint is down for several hours — what happens to its deliveries?</span><span class="zh">订阅者端点宕机数小时——其投递会怎样？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Delivery workers hit the circuit breaker after N consecutive failures; the circuit opens and the endpoint is skipped
+            for a cool-down period. Deliveries are queued in the per-endpoint queue during this window (not dropped). The circuit
+            probes with a single request every cool-down interval; when a 2xx is received, the circuit closes and the worker drains
+            the queue at a controlled rate (rate-limited resume) to avoid a thundering-herd on the recovering server.</span><span class="zh">投递 Worker 在连续 N 次失败后触发熔断器；熔断打开，在冷却期内跳过该端点。此窗口期间投递在 per-endpoint 队列中排队（不丢弃）。熔断器每个冷却间隔用单次请求探测；收到 2xx 后熔断关闭，Worker 以受控速率（限速恢复）消费队列，避免对正在恢复的服务器造成惊群效应。</span></p>
+            <p><span class="en">If the endpoint is still unreachable after 48 hours and 19 retry attempts, deliveries enter the DLQ. The merchant
+            is notified via dashboard alert and email. They can re-enable the subscription and trigger bulk redelivery from the
+            DLQ — the redelivery sets a fresh <code>next_retry_at</code> and retries the original payload with the original
+            <code>X-Shopify-Webhook-Id</code> so subscribers can deduplicate.</span><span class="zh">如果端点在 48 小时和 19 次重试后仍不可达，投递进入 DLQ。通过 Dashboard 告警和邮件通知商家。商家可重新启用订阅并从 DLQ 触发批量重新投递——重投递会设置新的 <code>next_retry_at</code>，并以原始的 <code>X-Shopify-Webhook-Id</code> 重试原 payload，使订阅者可以去重。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you handle poison or oversized payloads?</span><span class="zh">如何处理毒丸（poison）或超大 payload？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Enforce a payload size cap (e.g. 5 MB) at the Fan-out Service before enqueuing. Payloads that exceed the cap
+            are truncated or the delivery is immediately DLQ'd with a <code>PAYLOAD_TOO_LARGE</code> reason — the merchant
+            is alerted. For "poison" payloads (syntactically valid but semantically rejected by all subscribers with 4xx),
+            distinguish: a 400/422 from the subscriber means the payload was received and rejected intentionally, so no retry
+            should occur. Only 5xx and connection errors trigger retries. This prevents retry loops on payloads the subscriber
+            will never accept.</span><span class="zh">在 Fan-out Service 入队前强制限制 payload 大小（例如 5 MB）。超出上限的 payload 被截断或以 <code>PAYLOAD_TOO_LARGE</code> 原因直接进入 DLQ——并通知商家。对于"毒丸" payload（语法合法但被所有订阅者以 4xx 语义拒绝），需加以区分：订阅者返回 400/422 表示已收到但有意拒绝，不应重试。只有 5xx 和连接错误才触发重试。这可防止对订阅者永远不会接受的 payload 陷入重试死循环。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you guarantee order.created is delivered before order.updated for the same order?</span><span class="zh">如何保证同一订单的 order.created 在 order.updated 之前投递？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Within the Kafka event bus, both events for the same <code>shop_id</code> land on the same partition (keyed by
+            <code>shop_id</code>), so they are consumed by the Fan-out Service in order. The Fan-out Service enqueues delivery
+            tasks with a monotonically increasing <code>seq</code> derived from the Kafka offset. The delivery worker for a
+            given subscription processes tasks in <code>seq</code> order (one in-flight at a time) to maintain the ordering
+            guarantee end-to-end.</span><span class="zh">在 Kafka 事件总线中，同一 <code>shop_id</code> 的两个事件落在同一分区（以 <code>shop_id</code> 为键），因此 Fan-out Service 按顺序消费它们。Fan-out Service 用从 Kafka offset 派生的单调递增 <code>seq</code> 为投递任务编号。给定订阅的投递 Worker 按 <code>seq</code> 顺序处理任务（同时只有一条在途），从而端到端维护顺序保证。</span></p>
+            <p><span class="en">The tradeoff: ordering requires serial processing per subscription, which reduces throughput. If the subscriber
+            does not require strict ordering (most do not), the delivery worker can process in parallel and the constraint is lifted.</span><span class="zh">权衡：有序性要求按订阅串行处理，这会降低吞吐量。如果订阅者不要求严格有序（大多数不要求），投递 Worker 可并行处理，去掉此约束。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you scale fan-out for a popular app subscribed by thousands of shops?</span><span class="zh">如何为被数千个店铺订阅的热门应用扩展扇出？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">A popular app (e.g. a major fulfillment provider) may have subscriptions in 50,000 shops for the
+            <code>orders/create</code> topic. During BFCM, every one of those shops' order events must be fanned out to that
+            app's endpoint. The fan-out is bounded by the number of active subscriptions per (shop, topic) pair, not globally.
+            For a popular app, the deliveries go to a <em>single endpoint URL</em> — so they share one circuit breaker but
+            can be delivered in parallel (no ordering requirement across different shops).</span><span class="zh">一个热门应用（如主要履单服务商）可能在 5 万个店铺订阅了 <code>orders/create</code> 主题。在黑五期间，这些店铺的每一条订单事件都必须扇出到该应用的端点。扇出量由每个 (shop, topic) 对的活跃订阅数决定，而非全局。对于热门应用，所有投递指向<em>同一个端点 URL</em>——它们共享一个熔断器，但可以并行投递（不同店铺之间无顺序要求）。</span></p>
+            <p><span class="en">Scale by: (a) partitioning the per-endpoint queue for the popular app into multiple sub-queues (by shop_id range)
+            with parallel workers, (b) batching multiple deliveries into one HTTP call if the app supports it (reduces connection
+            overhead 10–100×), and (c) negotiating a pull model for very high-volume apps so they control consumption rate.</span><span class="zh">扩展方式：(a) 将热门应用的 per-endpoint 队列按 shop_id 范围分拆为多个子队列并行消费；(b) 若应用支持，将多条投递合并为一次 HTTP 调用（减少连接开销 10–100 倍）；(c) 对超高流量应用协商拉取模式，让其自行控制消费速率。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you monitor delivery SLA and alert merchants?</span><span class="zh">如何监控投递 SLA 并告警商家？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Key metrics to track per subscription: delivery latency P50/P95/P99 (time from event creation to first 2xx);
+            success rate (delivered / attempted); DLQ entry rate; per-endpoint queue depth; circuit breaker state.</span><span class="zh">按订阅跟踪的关键指标：投递延迟 P50/P95/P99（从事件创建到首次 2xx 的时间）；成功率（已投递 / 已尝试）；DLQ 进入速率；per-endpoint 队列深度；熔断器状态。</span></p>
+            <p><span class="en">SLA alerts: if a subscription's P95 delivery latency exceeds a threshold (e.g. 5 minutes) for more than
+            N minutes, alert the merchant via dashboard notification and email. If a subscription enters DLQ, immediately notify.
+            Shopify's status page should aggregate delivery health across the platform (not per-tenant) to surface systemic issues.</span><span class="zh">SLA 告警：如果某订阅的 P95 投递延迟超过阈值（例如 5 分钟）持续超过 N 分钟，通过 Dashboard 通知和邮件告警商家。若订阅进入 DLQ，立即通知。Shopify 状态页应聚合全平台（而非按租户）的投递健康状况，以便暴露系统性问题。</span></p>
+          </div>
+        </details>
+        <details class="faq-item">
+          <summary><span class="en">How do you prevent one tenant's event storm from starving others (fairness)?</span><span class="zh">如何防止单个租户的事件风暴饿死其他租户（公平性）？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">At the Fan-out Service, apply a <strong>per-shop enqueue rate limit</strong>: if a single shop produces more
+            than its fair share of fan-out tasks (e.g. based on their subscription count × event rate × a cap), excess tasks
+            are spooled to a lower-priority queue and drained after the burst subsides. This is weighted fair queuing — each
+            shop gets a fair share of the delivery infrastructure, with larger merchants getting proportionally more capacity
+            based on their plan tier.</span><span class="zh">在 Fan-out Service 处应用<strong>按店入队速率限制</strong>：若单个店铺产生的扇出任务超过其公平份额（例如基于其订阅数 × 事件速率 × 上限计算），超出的任务被存入低优先级队列，待突发平息后再消费。这是加权公平队列——每个店铺获得公平的投递基础设施份额，大商家根据其套餐等级获得按比例更多的容量。</span></p>
+            <p><span class="en">At the worker layer, use a <strong>work-stealing scheduler</strong> that fills idle worker capacity from any
+            shop's queue, but caps the fraction of workers any single shop can monopolize. This prevents a single shop running
+            a 100,000-item flash sale from consuming all delivery workers and delaying a small merchant's single checkout confirmation.</span><span class="zh">在 Worker 层，使用<strong>工作窃取调度器</strong>，从任意店铺队列填充空闲 Worker 容量，但限制单个店铺可独占的 Worker 比例上限。这可防止一个运行 10 万件商品抢购的店铺消耗所有投递 Worker，从而延迟小商家的单笔结账确认。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A subscriber returns HTTP 200 but is silently failing internally — how do you detect and handle it?</span><span class="zh">订阅者返回 HTTP 200 但内部静默失败——如何检测和处理？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Shopify can only observe the HTTP response code — a 200 is treated as a successful delivery by definition. The system cannot introspect what the subscriber does with the payload after acknowledging it. The correct contract is: <strong>Shopify guarantees delivery to the endpoint</strong>; the subscriber is responsible for deduplication and internal processing. Expose full delivery logs (attempt timestamps, status codes, payload hash) via the dashboard and API so merchants and app developers can audit whether their system processed each delivery. Offer a <strong>verification/echo endpoint</strong> that re-sends a test payload on demand, letting developers confirm their handler is actually executing. For critical integrations, recommend subscribers implement an independent reconciliation job that periodically cross-checks Shopify's event log against their own state.</span><span class="zh">Shopify 只能观察 HTTP 响应码——200 按定义即视为投递成功，系统无法感知订阅者在确认后对 payload 做了什么。正确的契约是：<strong>Shopify 保证将事件投递到端点</strong>，由订阅者负责去重和内部处理。通过 Dashboard 和 API 暴露完整的投递日志（尝试时间戳、状态码、payload 哈希），让商家和开发者审计每次投递是否被处理。提供<strong>验证/回显端点</strong>，按需重新发送测试 payload，方便开发者确认处理程序确实在执行。对于关键集成，建议订阅者实现独立的对账作业，定期将 Shopify 事件日志与自身状态进行交叉核验。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you let a merchant replay missed webhooks after their downtime?</span><span class="zh">如何让商家在故障恢复后重放错过的 Webhook？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Maintain a <strong>durable event log</strong> — the <code>event</code> table is append-only and never pruned within the retention window (e.g. 30 days). Expose a <strong>replay API</strong> that accepts a topic filter and a time range, then re-enqueues delivery tasks for all matching events against active subscriptions. The replay sets new <code>delivery.id</code> values so subscribers receive fresh <code>X-Shopify-Webhook-Id</code> headers; idempotent subscribers simply check whether they have already processed the underlying <code>event.idempotency_key</code> and skip re-processing if so. Rate-limit the replay enqueue rate to avoid overwhelming a subscriber that just came back online.</span><span class="zh">维护一个<strong>持久化事件日志</strong>——<code>event</code> 表仅追加写入，在保留窗口期内（例如 30 天）不删除。暴露一个<strong>重放 API</strong>，接受主题过滤条件和时间范围，然后将匹配事件重新入队投递到当前活跃的订阅。重放时生成新的 <code>delivery.id</code>，订阅者收到新的 <code>X-Shopify-Webhook-Id</code> 请求头；幂等订阅者只需检查是否已处理底层 <code>event.idempotency_key</code>，若已处理则跳过。对重放入队速率进行限流，避免刚恢复上线的订阅者被瞬间涌入的请求压垮。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">An app needs strict per-resource ordering — how do you support it?</span><span class="zh">某应用需要严格的按资源排序——如何支持？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Partition the Kafka topic (or per-endpoint queue) by <strong>resource ID</strong> (e.g. <code>order_id</code> or <code>product_id</code>) rather than just <code>shop_id</code>. Assign a <strong>single ordered consumer</strong> per partition key so events for the same resource are processed serially. Stamp each delivery task with a <strong>monotonic sequence number</strong> derived from the Kafka partition offset, and have the delivery worker enforce in-order delivery by blocking on the previous sequence before dispatching the next. The tradeoff is real: serial per-resource processing reduces parallelism for that subscription's workers, increases latency under load, and introduces head-of-line blocking <em>within</em> that resource's stream if the subscriber is slow. Only enable this mode when the app contract explicitly requires it (e.g. an inventory ledger that cannot tolerate out-of-order adjustments).</span><span class="zh">将 Kafka 主题（或 per-endpoint 队列）按<strong>资源 ID</strong>（例如 <code>order_id</code> 或 <code>product_id</code>）而非仅 <code>shop_id</code> 进行分区。为每个分区键分配<strong>单一有序消费者</strong>，使同一资源的事件串行处理。为每个投递任务打上来自 Kafka 分区偏移量的<strong>单调递增序列号</strong>，投递 Worker 在发送下一条前须确认上一条的顺序。权衡是真实存在的：按资源串行处理会降低该订阅 Worker 的并发度、在高负载下增加延迟，并在订阅者响应慢时在该资源流内引入队头阻塞问题。仅在应用契约明确要求时（如不能容忍乱序调整的库存账本）才启用此模式。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you prevent SSRF and protect against malicious subscriber URLs?</span><span class="zh">如何防止 SSRF 并防范恶意订阅者 URL？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">At registration time, validate the subscriber URL through multiple layers: (1) <strong>scheme allowlist</strong> — only <code>https://</code> is permitted; (2) <strong>DNS resolution + IP block list</strong> — resolve the hostname and reject if it maps to RFC-1918 private addresses, loopback (127.x), link-local (169.254.x — AWS metadata endpoint), or any other internal IP range; (3) <strong>DNS rebinding protection</strong> — re-resolve and re-check the IP at delivery time, not just at registration, because DNS TTLs allow an attacker to switch the DNS record to an internal IP after passing the initial check; (4) route all outbound delivery traffic through a dedicated <strong>egress proxy</strong> with a strict allowlist of external IP ranges, so even if a validation bypass occurs, the proxy acts as a second defense layer. Log all blocked attempts for security audit.</span><span class="zh">在注册时通过多层校验对订阅者 URL 进行验证：(1) <strong>协议白名单</strong>——仅允许 <code>https://</code>；(2) <strong>DNS 解析 + IP 封锁列表</strong>——解析主机名，如指向 RFC-1918 私有地址、回环地址（127.x）、链路本地地址（169.254.x，即 AWS 元数据端点）或其他内部 IP 段则拒绝；(3) <strong>DNS 重绑定防护</strong>——在每次投递时而非仅在注册时重新解析并检查 IP，因为 DNS TTL 允许攻击者在通过初始检查后将 DNS 记录切换为内部 IP；(4) 将所有出站投递流量通过专用<strong>出口代理</strong>路由，该代理维护严格的外部 IP 段白名单，即使验证被绕过，代理也能作为第二道防线。记录所有被拦截的尝试以供安全审计。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">How do you version webhook payloads without breaking existing subscribers?</span><span class="zh">如何对 Webhook payload 进行版本管理而不破坏现有订阅者？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">Pin each subscription to the <strong>API version active at registration time</strong> (e.g. <code>2024-01</code>). When the subscriber registers, record the version; the Fan-out Service serializes the payload using that version's schema, not the current platform schema. Apply only <strong>additive, backward-compatible changes</strong> within a version (new optional fields are safe; removing or renaming fields is a breaking change that requires a new version). Announce a <strong>deprecation window</strong> (typically 12–24 months) before retiring an old version, giving app developers time to migrate. Provide a migration guide and a test mode that lets developers preview the new payload format before cutting over. Never silently change payload structure for an active subscription.</span><span class="zh">将每个订阅绑定到<strong>注册时有效的 API 版本</strong>（例如 <code>2024-01</code>）。订阅者注册时记录版本号；Fan-out 服务使用该版本的 Schema 序列化 payload，而非当前平台的最新 Schema。在版本内只允许<strong>向后兼容的追加式变更</strong>（新增可选字段是安全的；删除或重命名字段属于破坏性变更，需要引入新版本）。在弃用旧版本前公告<strong>废弃窗口期</strong>（通常 12–24 个月），给开发者留出迁移时间。提供迁移指南和测试模式，让开发者在切换前预览新 payload 格式。绝不在不通知的情况下更改活跃订阅的 payload 结构。</span></p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary><span class="en">A subscriber is slow — how do you rate-limit deliveries to it without backing up everyone else?</span><span class="zh">某订阅者响应慢——如何对其限速同时不阻塞其他订阅者？</span></summary>
+          <div class="faq-body">
+            <p><span class="en">The per-endpoint queue architecture already provides the core isolation: a slow subscriber only backs up <em>its own</em> queue, not shared infrastructure. Within that queue, add three additional controls: (1) a <strong>per-endpoint concurrency cap</strong> — limit the number of in-flight deliveries to that endpoint at any moment (e.g. 5 concurrent requests); if it is slow, workers naturally stop pulling from its queue once the cap is hit, preventing connection-thread exhaustion on Shopify's side; (2) a <strong>per-endpoint delivery rate limit</strong> — a token-bucket limiter that controls requests/sec to that endpoint, configurable per subscriber tier; (3) a <strong>circuit breaker</strong> that opens when error rate or latency exceeds thresholds, temporarily halting deliveries and queuing them for later. Together these ensure a slow subscriber is isolated and degraded gracefully without consuming delivery worker threads that could serve healthy endpoints.</span><span class="zh">per-endpoint 队列架构已经提供了核心隔离：慢速订阅者只会使<em>自己的</em>队列积压，而不会影响共享基础设施。在此基础上，为该队列增加三项额外控制：(1) <strong>per-endpoint 并发上限</strong>——限制同一时刻对该端点的并发飞行投递数（例如 5 个并发请求）；若响应慢，Worker 在达到上限后自然停止从其队列取任务，防止 Shopify 端的连接线程耗尽；(2) <strong>per-endpoint 投递速率限制</strong>——令牌桶限流器控制对该端点的 QPS，可按订阅者等级配置；(3) <strong>断路器</strong>——当错误率或延迟超过阈值时断开，临时停止投递并将任务排队等待后续处理。三者共同作用，确保慢速订阅者被优雅地隔离降级，而不占用原本可以服务健康端点的投递 Worker 线程。</span></p>
+          </div>
+        </details>
+      </div>
+
+      <div class="callout callout--staff" style="margin-top:16px;">
+        <span class="ct"><span class="en">Staff-level summary — say these six things</span><span class="zh">Staff 级别总结——这六点必须说</span></span>
+        <ol style="margin:6px 0 0;">
+          <li><span class="en"><strong>At-least-once + subscriber idempotency is the honest contract.</strong> Exactly-once over HTTP to third parties is impractical; document the contract and provide a delivery ID for deduplication.</span><span class="zh"><strong>At-least-once + 订阅者幂等性才是诚实的契约。</strong>对第三方进行 HTTP 精确一次不现实；明确契约文档，并提供投递 ID 用于去重。</span></li>
+          <li><span class="en"><strong>Per-endpoint queues kill head-of-line blocking.</strong> A single shared queue is the fastest way to make one dead subscriber stall deliveries for everyone.</span><span class="zh"><strong>Per-endpoint 队列消除队头阻塞。</strong>单一共享队列是让一个宕机订阅者阻塞所有人投递的最快方式。</span></li>
+          <li><span class="en"><strong>Exponential back-off + jitter → DLQ with replay.</strong> Never retry on 4xx (subscriber rejected intentionally). Rate-limit on resume to avoid thundering-herd.</span><span class="zh"><strong>指数退避 + 抖动 → DLQ 可重放。</strong>4xx 绝不重试（订阅者有意拒绝）。恢复时限速避免惊群效应。</span></li>
+          <li><span class="en"><strong>HMAC-SHA256 + timestamp + HTTPS + replay protection.</strong> Each subscription has its own secret; a compromised secret is scoped to that subscription, not the platform.</span><span class="zh"><strong>HMAC-SHA256 + 时间戳 + HTTPS + 防重放。</strong>每个订阅有独立密钥；密钥泄露仅影响该订阅，不波及整个平台。</span></li>
+          <li><span class="en"><strong>Partition for ordering only where required.</strong> Kafka partition-by-shop gives coarse ordering for free; strict per-subscription ordering costs throughput and is rarely needed.</span><span class="zh"><strong>仅在必要时用分区保序。</strong>Kafka 按店分区免费提供粗粒度有序；严格按订阅有序消耗吞吐量且极少需要。</span></li>
+          <li><span class="en"><strong>Buffer events in Kafka + autoscale workers + per-shop fairness for storms.</strong> The event bus absorbs spikes; per-shop enqueue caps prevent one storming merchant from starving others.</span><span class="zh"><strong>Kafka 缓冲事件 + Worker 自动扩容 + 按店公平性应对风暴。</strong>事件总线吸收尖峰；按店入队上限防止一个风暴商家饿死其他人。</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- SOURCES -->
+    <section class="step" data-accent="data">
+      <div class="step-head"><span class="step-num">§</span><h2><span class="en">Sources</span><span class="zh">参考资料</span></h2></div>
+      <ul class="sources">
+        <li><a href="https://www.systemdesignhandbook.com/guides/shopify-system-design-interview/">System Design Handbook — Shopify system design interview guide</a></li>
+        <li><a href="https://algomaster.io/learn/system-design-interviews/design-shopify">AlgoMaster — Design Shopify (event delivery and async patterns)</a></li>
+        <li><a href="https://www.interviewquery.com/interview-guides/shopify-software-engineer">Interview Query — Shopify Software Engineer interview guide</a></li>
+      </ul>
+      <p style="margin-top:14px;">
+        <a href="06_product_search.html">← 06 · <span class="en">Product Search</span><span class="zh">商品搜索</span></a>
+        &nbsp;·&nbsp;
+        <a href="08_rate_limiter.html">08 · <span class="en">Rate Limiter</span><span class="zh">限流</span> →</a>
+      </p>
+    </section>
+
+  </main>
+</div>
+<script>
+function toggleLang(){var b=document.body,zh=b.classList.toggle('zh');try{localStorage.setItem('sdlang',zh?'zh':'en');}catch(e){}var t=document.getElementById('langbtn');if(t)t.textContent=zh?'EN':'中文';document.documentElement.lang=zh?'zh':'en';}
+(function(){try{if(localStorage.getItem('sdlang')==='zh'){document.body.classList.add('zh');var t=document.getElementById('langbtn');if(t)t.textContent='EN';document.documentElement.lang='zh';}}catch(e){}})();
+</script>
+</body>
+</html>
