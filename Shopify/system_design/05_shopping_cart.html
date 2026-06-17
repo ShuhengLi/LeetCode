@@ -894,6 +894,98 @@ body.zh .zh{display:revert;}
         automation pipeline — an email or push notification is sent ~1 hour after the last activity. The cart document
         is kept long enough (up to 7 days post-abandonment) to allow recovery link click-throughs to restore the cart.</span><span class="zh"><strong>废弃购物车召回</strong>：<code>cart.abandoned</code> Kafka 事件触发营销自动化流程——在最后一次活跃约 1 小时后发送邮件或推送通知。购物车文档保留足够长时间（废弃后最多 7 天），以便用户通过召回链接点击后还原购物车。</span></li>
       </ul>
+
+      <h3><span class="en">⑥ The cart-merge algorithm in depth — the conflict matrix</span><span class="zh">⑥ 购物车合并算法深度剖析——冲突矩阵</span></h3>
+      <p><span class="en">When an anonymous cart merges into a logged-in user's cart on login, the merge function must handle four
+      distinct cases exhaustively. Getting even one case wrong causes lost items, doubled quantities, or stale prices
+      reaching checkout.</span><span class="zh">当匿名购物车在登录时合并到已登录用户的购物车时，合并函数必须穷举处理四种不同的情况。哪怕只有一种情况处理错误，都会导致商品丢失、数量翻倍，或过时价格到达结账流程。</span></p>
+
+      <table class="tbl-trade">
+        <thead><tr>
+          <th><span class="en">Case</span><span class="zh">情况</span></th>
+          <th><span class="en">Condition</span><span class="zh">条件</span></th>
+          <th><span class="en">Resolution rule</span><span class="zh">解决规则</span></th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="en">1 · Line only in anon cart</span><span class="zh">1 · 行条目仅在匿名购物车中</span></td>
+            <td><span class="en">variant exists in anon cart, not in user cart</span><span class="zh">变体存在于匿名购物车，不在用户购物车中</span></td>
+            <td><span class="en">Append to user cart; preserve <code>added_at</code> timestamp and anon cart's <code>price_at_add</code> (re-validated at checkout anyway)</span><span class="zh">追加到用户购物车；保留 <code>added_at</code> 时间戳和匿名购物车的 <code>price_at_add</code>（结账时无论如何都会重新验证）</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">2 · Line only in user cart</span><span class="zh">2 · 行条目仅在用户购物车中</span></td>
+            <td><span class="en">variant exists in user cart, not in anon cart</span><span class="zh">变体存在于用户购物车，不在匿名购物车中</span></td>
+            <td><span class="en">Keep untouched — the user cart is authoritative; the merge must never drop existing user items</span><span class="zh">保持不变——用户购物车是权威；合并绝不能删除已有的用户商品</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">3 · Same variant in both carts</span><span class="zh">3 · 同一变体同时存在于两个购物车</span></td>
+            <td><span class="en">variant_id matches in both; quantities may differ</span><span class="zh">variant_id 在两者中匹配；数量可能不同</span></td>
+            <td><span class="en">Sum quantities; cap at <code>MAX_QTY_PER_VARIANT</code> (e.g. 99); retain user cart's <code>price_at_add</code> — it is the older, more likely verified price; do NOT add the quantities twice on a retry (idempotency key guards this)</span><span class="zh">累加数量；上限为 <code>MAX_QTY_PER_VARIANT</code>（如 99）；保留用户购物车的 <code>price_at_add</code>——它是更旧、更可能经过验证的价格；重试时切勿重复累加数量（幂等键防范此情况）</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">4 · Price changed since add</span><span class="zh">4 · 加购后价格已变更</span></td>
+            <td><span class="en">anon cart's <code>price_at_add</code> ≠ current live price</span><span class="zh">匿名购物车的 <code>price_at_add</code> ≠ 当前实时价格</span></td>
+            <td><span class="en">Keep the stored price for display; re-price at checkout — <strong>never trust any cart's stored price to charge the buyer</strong>; the Checkout Service always fetches the live price from the Pricing Service</span><span class="zh">保留存储价格用于展示；结账时重新定价——<strong>绝不信任任何购物车中存储的价格来向买家收费</strong>；Checkout Service 始终从定价服务获取实时价格</span></td>
+          </tr>
+          <tr>
+            <td><span class="en">5 · Line now out of stock</span><span class="zh">5 · 行条目当前缺货</span></td>
+            <td><span class="en">variant is out of stock at merge time</span><span class="zh">合并时该变体已缺货</span></td>
+            <td><span class="en">Keep the line item but annotate it with a soft <code>availableForSale: false</code> flag; do NOT silently drop it — losing items is worse than showing a stale flag; re-validate at checkout before allowing order creation</span><span class="zh">保留行条目但标注软性 <code>availableForSale: false</code> 标志；切勿静默删除——丢失商品比显示过时标志更糟糕；在允许创建订单前于结账时重新验证</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><span class="en">The merge must be <strong>idempotent</strong>. If the login event is delivered twice (e.g., a network retry), replaying
+      the merge must not double quantities. The guard is simple: key the merge operation on the source anonymous
+      <code>cart_id</code>. On the first successful merge, the anonymous cart is deleted from the KV store. Any subsequent
+      replay finds a missing anon cart and treats it as an empty cart — a no-op.</span><span class="zh">合并必须是<strong>幂等的</strong>。如果登录事件被传递两次（如网络重试），重放合并绝不能使数量翻倍。防护措施很简单：以源匿名 <code>cart_id</code> 作为合并操作的键。首次成功合并后，匿名购物车从 KV store 中删除。任何后续重放都会发现匿名购物车不存在，并将其视为空购物车——即空操作。</span></p>
+
+      <pre><code><span class="c">// Cart merge — conflict matrix in pseudocode</span>
+<span class="k">function</span> mergeCart(userCartId, anonCartId, sourceCartId):
+  <span class="c">// idempotency guard — key on source cart identity</span>
+  <span class="k">if</span> mergeLog.exists(sourceCartId):
+    <span class="k">return</span> kv.get(userCartId)          <span class="c">// already merged; no-op</span>
+
+  anonCart = kv.get(anonCartId)        <span class="c">// may be null if already deleted</span>
+  <span class="k">if</span> anonCart == <span class="n">null</span>:
+    <span class="k">return</span> kv.get(userCartId)          <span class="c">// anon cart gone → no-op</span>
+
+  userCart = kv.getOrCreate(userCartId)
+
+  <span class="k">for</span> anonLine <span class="k">in</span> anonCart.lines:
+    existing = userCart.findByVariant(anonLine.variantId)
+
+    <span class="k">if</span> existing == <span class="n">null</span>:
+      <span class="c">// Case 1: line only in anon cart → append</span>
+      userCart.lines.append(anonLine)
+
+    <span class="k">else</span>:
+      <span class="c">// Case 3: same variant in both → sum + cap</span>
+      existing.qty = min(existing.qty + anonLine.qty, <span class="n">MAX_QTY_PER_VARIANT</span>)
+      <span class="c">// keep user cart's price_at_add (Case 4: price drift handled at checkout)</span>
+
+    <span class="c">// Case 5: stock flag — annotate; never drop</span>
+    <span class="k">if</span> inventory.isOutOfStock(anonLine.variantId):
+      existing_or_new.availableForSale = <span class="n">false</span>
+
+  <span class="c">// Case 2: lines only in user cart → untouched (loop over anon only)</span>
+
+  userCart.updated_at = now()
+  kv.put(userCartId, userCart)         <span class="c">// write merged doc atomically</span>
+  kv.del(anonCartId)                   <span class="c">// delete anon cart → makes merge idempotent</span>
+  mergeLog.record(sourceCartId)        <span class="c">// record merge for replay dedup</span>
+  emitEvent(<span class="s">"cart.merged"</span>, {userCartId, anonCartId})</code></pre>
+
+      <div class="callout callout--warn">
+        <span class="ct"><span class="en">Cart is AP — merge favors not losing items over strict correctness</span><span class="zh">购物车是 AP 系统——合并策略倾向于不丢失商品，而非严格正确</span></span>
+        <p class="en">Because the cart sits on the AP side of the CAP spectrum, the merge algorithm is deliberately conservative:
+        <strong>when in doubt, keep the item</strong>. An out-of-stock line that stays in the cart is surfaced as a
+        clear error at checkout — a recoverable UX moment. A line that is silently dropped is a lost sale and a
+        support ticket. This asymmetry (false positives are tolerable; false negatives are not) drives every case
+        in the conflict matrix. The checkout service is the correct enforcement point for hard constraints; the
+        merge service should be as lossless as possible.</p>
+        <p class="zh">由于购物车处于 CAP 频谱的 AP 一侧，合并算法有意保守：<strong>有疑虑时，保留商品</strong>。留在购物车中的缺货行条目会在结账时以明确错误的形式呈现——这是可恢复的用户体验时刻。被静默删除的行条目则是损失的订单和客服工单。这种不对称性（假阳性可接受；假阴性不可接受）驱动了冲突矩阵中的每一个情况。结账服务是执行硬性约束的正确地方；合并服务应尽可能做到无损。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -945,6 +1037,183 @@ body.zh .zh{display:revert;}
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① CAP stance — CP (reject writes) vs AP (serve stale + queue writes)</span><span class="zh">① CAP 取向——CP（拒绝写入）vs AP（提供过时读取 + 写入入队）</span></h3>
+      <p class="en"><strong>The tension:</strong> when the KV store is degraded during a BFCM spike, do you reject cart mutations to stay consistent, or serve and queue them to stay available?</p>
+      <p class="zh"><strong>矛盾点：</strong>当 KV store 在 BFCM 峰值期间降级时，你是拒绝购物车变更以保持一致性，还是继续提供服务并将写入入队以保持可用性？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · CP — reject writes when degraded</span><span class="zh">方案 A · CP——降级时拒绝写入</span></div>
+          <p class="en">Any write that cannot be durably committed returns a 5xx immediately. The cart is always consistent with the KV store; there is no stale-read risk.</p>
+          <p class="zh">任何无法持久提交的写入立即返回 5xx。购物车始终与 KV store 保持一致，无过时读取风险。</p>
+          <p class="en"><strong>+</strong> Simpler reasoning — if you can read a cart you know it reflects all completed writes; no retry queues, no reconciliation jobs needed on the hot path.</p>
+          <p class="zh"><strong>+</strong> 推理更简单——能读到购物车就意味着它反映了所有已完成的写入；热路径上无需重试队列、无需对账任务。</p>
+          <p class="en"><strong>−</strong> During a partial outage, add-to-cart fails visibly — a buyer can't add an item during peak BFCM traffic. This is an abandoned sale. For a non-money-critical service like the cart, a hard 500 is far worse than a stale read.</p>
+          <p class="zh"><strong>−</strong> 局部故障期间，加购操作明显失败——买家在 BFCM 峰值流量时无法添加商品，直接等同于丢失订单。对于购物车这种非金融关键服务，返回硬性 500 远比过时读取更糟糕。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · AP — serve stale, queue writes</span><span class="zh">方案 B · AP——提供过时读取，写入入队</span></div>
+          <p class="en">On a KV store degradation, the Cart Service returns the last known cart from an in-process or edge cache, and queues mutations for async retry. The buyer sees a (possibly slightly stale) cart rather than an error page.</p>
+          <p class="zh">KV store 降级时，Cart Service 从进程内或边缘缓存返回最后已知的购物车，并将变更入队以供异步重试。买家看到一个（可能略微过时的）购物车，而非错误页面。</p>
+          <p class="en"><strong>+</strong> The cart is always available — critical during BFCM when traffic spikes 20–50×. Money correctness is delegated to the checkout service, which always validates price and stock live; a stale cart is therefore safe to serve.</p>
+          <p class="zh"><strong>+</strong> 购物车始终可用——在流量峰值达 20–50 倍的 BFCM 期间至关重要。金钱正确性委托给结账服务，它始终实时验证价格和库存；因此提供过时购物车是安全的。</p>
+          <p class="en"><strong>−</strong> Requires a retry queue and idempotent mutations (Idempotency-Key header guards against duplicate writes on replay). A "stale item" the buyer sees but that is truly out of stock will surface as an error at checkout — expected UX, not a bug.</p>
+          <p class="zh"><strong>−</strong> 需要重试队列和幂等变更（Idempotency-Key 请求头防止重放时重复写入）。买家看到但实际上已售罄的"过时商品"在结账时会以错误形式呈现——这是预期的用户体验，而非 Bug。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>AP is the right default for the cart</strong> — the cart is not money-critical; money-critical decisions (price, stock) are made at checkout. A slightly stale cart that is available beats an error that prevents the sale entirely. CP is appropriate only for services where serving stale data directly causes financial or legal harm (e.g., the payment service itself).</p>
+        <p class="zh"><strong>AP 是购物车的正确默认选择</strong>——购物车不是金融关键服务；金融关键决策（价格、库存）在结账服务做出。一个略微过时但可用的购物车，远好于完全阻止销售的报错。CP 仅适用于提供过时数据会直接造成经济或法律损害的服务（如支付服务本身）。</p>
+      </div>
+
+      <h3><span class="en">② Inventory in cart — reserve on add vs validate at checkout only</span><span class="zh">② 购物车中的库存——加购时预占 vs 仅在结账时验证</span></h3>
+      <p class="en"><strong>The tension:</strong> do you lock a unit of inventory the moment a buyer adds it to their cart, or do you wait until they actually start checkout?</p>
+      <p class="zh"><strong>矛盾点：</strong>买家将商品加入购物车时就锁定一个库存单位，还是等到他们真正开始结账时才锁定？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Reserve on add-to-cart</span><span class="zh">方案 A · 加购时预占库存</span></div>
+          <p class="en">The Cart Service decrements inventory atomically when a line item is added; the reservation is held for the cart TTL (up to 30 days for authenticated users).</p>
+          <p class="zh">Cart Service 在添加行条目时原子性地扣减库存；预占持有时长等于购物车 TTL（已认证用户最长 30 天）。</p>
+          <p class="en"><strong>+</strong> Buyer never reaches checkout only to find an item gone — "what you see in the cart is yours." Lower checkout abandonment due to stock surprises.</p>
+          <p class="zh"><strong>+</strong> 买家不会到结账时才发现商品没了——"购物车里有的就是你的"。因库存意外导致的结账放弃率更低。</p>
+          <p class="en"><strong>−</strong> At 50M active carts × 30-day TTL, even a 10% abandonment rate locks millions of units for weeks. A merchant with 100 units in stock could see all 100 locked by carts that will never convert — effectively making the product appear sold-out to real buyers. Inventory service now tightly couples with the cart hot path.</p>
+          <p class="zh"><strong>−</strong> 在 50M 活跃购物车 × 30 天 TTL 的规模下，即使 10% 的放弃率也会将数百万单位锁定数周。拥有 100 件库存的商家可能看到全部 100 件被永远不会转化的购物车锁住——实际上让真实买家看到的是"已售罄"。库存服务现在与购物车热路径紧密耦合。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Validate at checkout only</span><span class="zh">方案 B · 仅在结账时验证</span></div>
+          <p class="en">The cart holds no inventory reservation. The Checkout Service calls the Inventory Service, validates stock, and decrements atomically only at order creation time (a short 10–15 minute window).</p>
+          <p class="zh">购物车不持有库存预占。Checkout Service 调用库存服务，仅在创建订单时（短暂的 10–15 分钟窗口）验证库存并原子性地扣减。</p>
+          <p class="en"><strong>+</strong> Merchant stock is always accurate — adding to a cart has zero impact on visible inventory. Fully decouples the cart (AP, ephemeral) from inventory (CP, durable). The checkout window reservation (10–15 min) is short enough to have negligible lockup effect.</p>
+          <p class="zh"><strong>+</strong> 商家库存始终准确——加入购物车对可见库存零影响。将购物车（AP、短暂）与库存（CP、持久）完全解耦。结账窗口预占（10–15 分钟）短到对库存锁定影响微乎其微。</p>
+          <p class="en"><strong>−</strong> A buyer can have an item in their cart for 30 days, start checkout, and find it gone. This is expected UX (the checkout service surfaces the error), but it can surprise buyers. Requires clear messaging at checkout when stock is no longer available.</p>
+          <p class="zh"><strong>−</strong> 买家可能将商品在购物车放置 30 天后开始结账，却发现商品已没货。这是预期的用户体验（结账服务会提示错误），但可能让买家感到意外。在库存不再可用时，结账流程需要清晰的提示信息。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Validate at checkout only is the only workable model at Shopify scale.</strong> Reserving in the cart at 50M carts × 30-day TTL would effectively destroy merchant inventory availability. The checkout-time reservation window (10–15 min) is the right place for locking because it is short, bounded, and tied to real payment intent. Reserve-on-add only makes sense for very scarce, time-limited items (e.g., concert tickets) where the cart TTL is also short (minutes, not days).</p>
+        <p class="zh"><strong>仅在结账时验证是 Shopify 规模下唯一可行的模型。</strong>在 50M 购物车 × 30 天 TTL 的规模下预占库存，实际上会摧毁商家的库存可用性。结账时的预占窗口（10–15 分钟）是锁定库存的正确时机，因为它短暂、有界，且与真实的支付意图绑定。仅当商品极度稀缺且有时间限制（如演唱会门票），并且购物车 TTL 也很短（分钟级而非天级）时，加购时预占才有意义。</p>
+      </div>
+
+      <h3><span class="en">③ Storage engine — Redis vs DynamoDB (vs RDBMS)</span><span class="zh">③ 存储引擎——Redis vs DynamoDB（vs RDBMS）</span></h3>
+      <p class="en"><strong>The tension:</strong> you need sub-millisecond reads, native TTL, horizontal scale, and durability — no single engine maximizes all four simultaneously.</p>
+      <p class="zh"><strong>矛盾点：</strong>你需要亚毫秒级读取、原生 TTL、水平扩展和持久化——没有单一引擎能同时将四者最大化。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Redis (hot cache)</span><span class="zh">方案 A · Redis（热缓存）</span></div>
+          <p class="en">The entire cart document is stored as a single JSON blob under one key. Reads and writes are atomic single-key operations; native TTL handles expiry automatically; Lua scripts enable conditional atomic mutations.</p>
+          <p class="zh">整个购物车文档以单个 JSON blob 存储在一个键下。读写是原子的单键操作；原生 TTL 自动处理过期；Lua 脚本支持条件原子变更。</p>
+          <p class="en"><strong>+</strong> Sub-millisecond latency (p50 &lt;1 ms); single-threaded serialization with no locking; trivially scales reads with replicas; handles 50 GB of active cart data on a mid-size cluster.</p>
+          <p class="zh"><strong>+</strong> 亚毫秒延迟（p50 &lt;1 ms）；单线程串行化无需加锁；通过副本轻松扩展读取；中型集群轻松处理 50 GB 活跃购物车数据。</p>
+          <p class="en"><strong>−</strong> Not durable by default — an unclean Redis failover with AOF <code>everysec</code> can lose up to ~1 s of writes. Memory is finite; at 50 GB active data you need careful capacity planning. No secondary indices, no ad-hoc queries.</p>
+          <p class="zh"><strong>−</strong> 默认不持久——采用 AOF <code>everysec</code> 的非正常 Redis 故障切换可能丢失约 1 秒的写入。内存有限；50 GB 活跃数据需要仔细做容量规划。无二级索引，无临时查询。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · DynamoDB (durable KV)</span><span class="zh">方案 B · DynamoDB（持久化 KV）</span></div>
+          <p class="en">Fully managed, horizontally scaled, durable document store with native TTL. Single-digit ms latency on point lookups; no capacity pre-provisioning needed in on-demand mode.</p>
+          <p class="zh">全托管、水平扩展、持久化的文档存储，具备原生 TTL。点查询延迟个位数毫秒；按需模式下无需预置容量。</p>
+          <p class="en"><strong>+</strong> Durable (multi-AZ replication), no ops burden, autoscales to BFCM without pre-warming, native TTL, Global Tables for multi-region. Good default for cart at Shopify scale.</p>
+          <p class="zh"><strong>+</strong> 持久化（多可用区复制），零运维负担，无需预热即可应对 BFCM，原生 TTL，Global Tables 支持多区域。Shopify 规模下购物车的优质默认选择。</p>
+          <p class="en"><strong>−</strong> ~5 ms p50 vs Redis &lt;1 ms — still fast enough for most flows, but noticeable under aggressive read amplification (e.g., storefront polling every page load). More expensive than Redis per GB for pure hot-cache workloads.</p>
+          <p class="zh"><strong>−</strong> p50 约 5 ms，而 Redis &lt;1 ms——对大多数流程仍然足够快，但在激进的读放大场景下（如店面每次页面加载都轮询）会有感知。纯热缓存工作负载下每 GB 成本高于 Redis。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use both: Redis for the hot path, DynamoDB as the durable source of truth.</strong> Write-through pattern: every mutation writes to DynamoDB first (durable), then refreshes the Redis key (fast). On a Redis miss, fall through to DynamoDB and back-fill. This gives sub-millisecond reads on the hot path and zero data loss on failure. An RDBMS (PostgreSQL/MySQL) is actively wrong here — normalized rows require a JOIN on every cart read, and SQL can't TTL natively; only consider it if the cart grows into a complex query surface (wishlists, saved-for-later).</p>
+        <p class="zh"><strong>两者兼用：Redis 负责热路径，DynamoDB 作为持久化权威数据源。</strong>写透模式：每次变更先写入 DynamoDB（持久化），再刷新 Redis 键（快速）。Redis 未命中时降级到 DynamoDB 并回填。这样在热路径上获得亚毫秒级读取，同时在故障时零数据丢失。RDBMS（PostgreSQL/MySQL）在这里是错误的选择——规范化行在每次购物车读取时都需要 JOIN，且 SQL 不支持原生 TTL；仅当购物车演化为复杂查询面（心愿单、稍后购买）时才考虑。</p>
+      </div>
+
+      <h3><span class="en">④ Concurrent device writes — LWW vs OCC (version field)</span><span class="zh">④ 并发设备写入——LWW vs OCC（version 字段）</span></h3>
+      <p class="en"><strong>The tension:</strong> a logged-in user can edit their cart from laptop and mobile simultaneously. How do you handle the write conflict without requiring complex distributed coordination?</p>
+      <p class="zh"><strong>矛盾点：</strong>已登录用户可以同时从笔记本和手机编辑购物车。如何在不需要复杂分布式协调的情况下处理写入冲突？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · LWW — last write wins</span><span class="zh">方案 A · LWW——最后写入获胜</span></div>
+          <p class="en">Whichever write arrives at the KV store last atomically overwrites the document. No version bookkeeping, no client retry loop. The server always returns the canonical document after each mutation, so clients auto-reconcile on the next round-trip.</p>
+          <p class="zh">最后到达 KV store 的写入原子性地覆盖文档。无需版本簿记，无需客户端重试循环。服务端每次变更后总是返回权威文档，因此客户端在下一次往返时自动协调。</p>
+          <p class="en"><strong>+</strong> Zero operational complexity on the server side; no 409 handling needed; works correctly in the common case (one active session at a time for most users).</p>
+          <p class="zh"><strong>+</strong> 服务端零操作复杂度；无需处理 409；在常见情况下（大多数用户一次只有一个活跃会话）工作正确。</p>
+          <p class="en"><strong>−</strong> A slow device can silently undo a recent write from a faster device. If the laptop adds item A and the phone simultaneously removes item B, one of those changes can be lost — silently. This is the RYOW (read-your-own-writes) hazard in a multi-device world.</p>
+          <p class="zh"><strong>−</strong> 慢设备可能悄悄撤销来自快设备的最新写入。如果笔记本添加商品 A 而手机同时删除商品 B，其中一个变更可能悄无声息地丢失。这是多设备环境中的 RYOW（读己所写）风险。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · OCC — optimistic concurrency via version</span><span class="zh">方案 B · OCC——通过 version 字段实现乐观并发控制</span></div>
+          <p class="en">Each cart document carries a <code>version</code> integer. The client reads the current version, sends it with its mutation, and the server rejects with <code>409 Conflict</code> if the stored version is higher. The client re-fetches and re-applies its change on top of the winner.</p>
+          <p class="zh">每个购物车文档携带一个 <code>version</code> 整数。客户端读取当前版本，随变更一起发送，若存储版本更高则服务端拒绝并返回 <code>409 Conflict</code>。客户端重新获取文档并在获胜方版本之上重放变更。</p>
+          <p class="en"><strong>+</strong> Lossless — no mutation is ever silently discarded; both device changes are guaranteed to be reflected in the final document. Correct under concurrent multi-device edits.</p>
+          <p class="zh"><strong>+</strong> 无损——任何变更都不会被静默丢弃；两台设备的变更都保证反映在最终文档中。在并发多设备编辑下结果正确。</p>
+          <p class="en"><strong>−</strong> Adds a retry round-trip for every conflict; requires clients to implement re-fetch-and-replay logic (non-trivial for mobile apps); conflicts on the same cart are rare — OCC overhead is paid unconditionally for a rare failure mode.</p>
+          <p class="zh"><strong>−</strong> 每次冲突增加一次重试往返；要求客户端实现重新获取并重放的逻辑（移动应用实现不简单）；同一购物车上的冲突很少——OCC 开销无条件为罕见故障模式买单。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>LWW is the right default</strong> — simultaneous multi-device cart edits are rare, a lost item is annoying but not catastrophic, and the client always receives the authoritative doc after each mutation to self-correct. Enable OCC (as a feature flag, per-shop or per-tier) only when lost-item reports exceed a measurable threshold, or for high-value wholesale accounts where correctness matters more than simplicity.</p>
+        <p class="zh"><strong>LWW 是正确的默认选择</strong>——多设备同时编辑购物车很罕见，丢失一个商品令人恼火但非灾难性，且每次变更后客户端总能收到权威文档以自我修正。仅当丢失商品投诉超过可测量的阈值，或对正确性比简单性更重要的高价值批发账号，才启用 OCC（作为功能标志，按店铺或等级开放）。</p>
+      </div>
+
+      <h3><span class="en">⑤ Cart document shape — whole-document blob vs normalized rows</span><span class="zh">⑤ 购物车文档结构——整体文档 blob vs 规范化行</span></h3>
+      <p class="en"><strong>The tension:</strong> should the cart header and all its line items be one document in one KV key, or spread across a relational schema with one row per line item?</p>
+      <p class="zh"><strong>矛盾点：</strong>购物车头信息和所有行条目应该作为一个文档放在一个 KV 键下，还是分散到关系型结构中，每个行条目一行？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Whole-cart document</span><span class="zh">方案 A · 整体购物车文档</span></div>
+          <p class="en">Cart header + all line items serialized as a single JSON blob, stored under one KV key. Every read and write is a single-key GET or PUT — one round-trip, no joins.</p>
+          <p class="zh">购物车头信息 + 所有行条目序列化为单个 JSON blob，存储在一个 KV 键下。每次读写都是单键 GET 或 PUT——一次往返，无需联表。</p>
+          <p class="en"><strong>+</strong> O(1) reads regardless of line item count; trivially cacheable; atomic at the document level; perfectly maps to the "give me the whole cart" access pattern that accounts for ~100% of hot-path traffic.</p>
+          <p class="zh"><strong>+</strong> 读取复杂度与行条目数量无关为 O(1)；极易缓存；在文档级别原子；完美映射"给我整个购物车"的访问模式，该模式占热路径流量约 100%。</p>
+          <p class="en"><strong>−</strong> Updating one line item reads and rewrites the whole document (read-modify-write); concurrent per-line updates need OCC or LWW at document level. Document size grows with cart size — a cart with 250 items at ~200 bytes/item is ~50 KB, manageable but needs a cap.</p>
+          <p class="zh"><strong>−</strong> 更新一个行条目需要读取并重写整个文档（读-改-写）；并发的逐行更新需要在文档级别使用 OCC 或 LWW。文档大小随购物车增长——250 个商品、每条约 200 字节的购物车约 50 KB，可管理但需要上限。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Normalized rows (cart + cart_line tables)</span><span class="zh">方案 B · 规范化行（cart 表 + cart_line 表）</span></div>
+          <p class="en">Cart header in a <code>cart</code> table; each line item in a separate <code>cart_line</code> row. SQL queries can aggregate, filter, or paginate across line items.</p>
+          <p class="zh">购物车头信息在 <code>cart</code> 表中；每个行条目在独立的 <code>cart_line</code> 行中。SQL 查询可以对行条目进行聚合、过滤或分页。</p>
+          <p class="en"><strong>+</strong> Updating one line item is a targeted single-row UPDATE; concurrent edits to different line items are automatically conflict-free; rich SQL queries (analytics, cross-cart aggregations) are possible.</p>
+          <p class="zh"><strong>+</strong> 更新一个行条目是针对性的单行 UPDATE；对不同行条目的并发编辑天然无冲突；可以进行丰富的 SQL 查询（分析、跨购物车聚合）。</p>
+          <p class="en"><strong>−</strong> Every cart read requires a JOIN between <code>cart</code> and <code>cart_line</code> — 2 round-trips minimum or 1 round-trip with a JOIN; far more expensive for the dominant hot-path access pattern. SQL can't TTL natively; needs a cron job to expire carts. RDBMS doesn't scale horizontally for 50M active rows without significant sharding work.</p>
+          <p class="zh"><strong>−</strong> 每次购物车读取都需要 <code>cart</code> 和 <code>cart_line</code> 之间的 JOIN——最少 2 次往返或一次带 JOIN 的往返；对主导性热路径访问模式代价高昂。SQL 不支持原生 TTL，需要定时任务过期购物车。RDBMS 在没有大量分片工作的情况下无法水平扩展 5000 万活跃行。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Whole-document is the only right answer at this scale.</strong> The access pattern is "give me the entire cart" ~100% of the time; the SQL JOIN has no upside for this query shape. Normalized rows are appropriate only if the cart evolves into a feature with rich query requirements (e.g., "show all carts containing SKU X" for admin analytics) — and even then, maintain a separate denormalized query projection rather than switching the hot path to SQL.</p>
+        <p class="zh"><strong>整体文档是这一规模下唯一正确的答案。</strong>访问模式约 100% 的时间都是"给我整个购物车"；SQL JOIN 对这种查询形式没有任何好处。规范化行仅适用于购物车演化为具有丰富查询需求的功能时（如管理分析中"显示所有含 SKU X 的购物车"）——即便如此，也应维护一个独立的去规范化查询投影，而不是将热路径切换到 SQL。</p>
+      </div>
+
+      <h3><span class="en">⑥ Anonymous cart identity — signed cookie token vs server-side session</span><span class="zh">⑥ 匿名购物车身份——签名 cookie 令牌 vs 服务端 session</span></h3>
+      <p class="en"><strong>The tension:</strong> how does the Cart Service know which anonymous cart belongs to which browser without asking a database on every request?</p>
+      <p class="zh"><strong>矛盾点：</strong>Cart Service 如何在不对每个请求查询数据库的情况下，知道哪个匿名购物车属于哪个浏览器？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Signed cookie token (HMAC)</span><span class="zh">方案 A · 签名 cookie 令牌（HMAC）</span></div>
+          <p class="en">On first add-to-cart, the Cart Service generates a <code>cart_id</code>, signs it with a shared HMAC key, and sets it as an HttpOnly, SameSite=Lax cookie. On subsequent requests, the service verifies the signature in O(1) — no DB lookup needed to authenticate the anonymous cart identity.</p>
+          <p class="zh">在首次加购时，Cart Service 生成一个 <code>cart_id</code>，用共享 HMAC 密钥签名，并将其设置为 HttpOnly、SameSite=Lax cookie。后续请求中，服务以 O(1) 验证签名——无需数据库查询即可认证匿名购物车身份。</p>
+          <p class="en"><strong>+</strong> Stateless verification — any Cart Service pod can validate the token without a session store lookup; survives load balancer rebalancing; CDN-friendly; no sticky sessions needed. Token rotation on HMAC key change invalidates all stale tokens without a DB migration.</p>
+          <p class="zh"><strong>+</strong> 无状态验证——任何 Cart Service Pod 都能在不查询 session 存储的情况下验证令牌；在负载均衡器重新分配时依然有效；CDN 友好；无需会话粘性。HMAC 密钥更换时令牌轮换使所有过时令牌失效，无需数据库迁移。</p>
+          <p class="en"><strong>−</strong> The token only proves "this is cart_id X" — it cannot carry additional state without increasing cookie size. Key rotation requires careful secret management (keep old key for grace period to avoid invalidating live carts mid-session). HMAC tokens can't be explicitly revoked without a denylist.</p>
+          <p class="zh"><strong>−</strong> 令牌只能证明"这是 cart_id X"——若不增加 cookie 大小则无法携带额外状态。密钥轮换需要谨慎的密钥管理（保留旧密钥一段宽限期，避免使进行中的 session 的购物车失效）。HMAC 令牌若无拒绝列表则无法显式吊销。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Server-side session store</span><span class="zh">方案 B · 服务端 session 存储</span></div>
+          <p class="en">A session ID in the cookie maps to a server-side session record (Redis or DB) that stores the <code>cart_id</code> and any other ephemeral state. The Cart Service looks up the session on every request to resolve the cart.</p>
+          <p class="zh">Cookie 中的 session ID 映射到服务端 session 记录（Redis 或 DB），其中存储 <code>cart_id</code> 和其他短暂状态。Cart Service 在每个请求上查询 session 来解析购物车。</p>
+          <p class="en"><strong>+</strong> Can store rich ephemeral state (device type, AB variant, referrer); explicit revocation by deleting the session record; easy to extend without changing the cookie format.</p>
+          <p class="zh"><strong>+</strong> 可以存储丰富的短暂状态（设备类型、AB 变体、来源页面）；通过删除 session 记录显式吊销；无需更改 cookie 格式即可轻松扩展。</p>
+          <p class="en"><strong>−</strong> Adds a session store hop on every anonymous request — extra latency + a new hot-path dependency. Session store becomes a single point of failure unless replicated; sticky sessions or a distributed store are needed for horizontal scaling.</p>
+          <p class="zh"><strong>−</strong> 每个匿名请求都多一次 session 存储查询——额外延迟 + 热路径上新增依赖。session 存储除非复制，否则成为单点故障；水平扩展需要会话粘性或分布式存储。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Signed cookie token is the right default for anonymous cart identity.</strong> The Cart Service needs to know exactly one thing from the anonymous identity: the <code>cart_id</code>. An HMAC-signed cookie delivers this with zero server-side state and zero added latency. Use a server-side session only when the anonymous state grows complex enough to warrant the extra dependency — and even then, keep the cart identity in the KV store rather than in the session to preserve stateless cart access.</p>
+        <p class="zh"><strong>签名 cookie 令牌是匿名购物车身份的正确默认选择。</strong>Cart Service 从匿名身份只需要知道一件事：<code>cart_id</code>。HMAC 签名 cookie 以零服务端状态、零额外延迟实现这一点。仅当匿名状态变得足够复杂到值得增加额外依赖时，才使用服务端 session——即便如此，也要将购物车身份保存在 KV store 而非 session 中，以保持无状态的购物车访问。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

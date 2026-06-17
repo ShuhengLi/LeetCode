@@ -859,6 +859,45 @@ body.zh .zh{display:revert;}
         <span class="en">Channel A (own storefront) and Channel B (Amazon) both see available=1 in their respective caches and both attempt to decrement. Channel A fires a SQL conditional UPDATE first — 1 row affected, success. Channel B's conditional UPDATE fires 50 ms later — 0 rows (available is now 0) → Inventory Service sends a correction webhook to Amazon reducing their available to 0. No oversell; Amazon gets a graceful "just sold out" signal. The SQL conditional UPDATE is the single point of truth.</span>
         <span class="zh">渠道 A（自有店面）和渠道 B（Amazon）都在各自缓存中看到 available=1，并都尝试扣减。渠道 A 先触发条件 SQL UPDATE——影响 1 行，成功。渠道 B 的条件 UPDATE 在 50 ms 后触发——影响 0 行（available 现在是 0）→ Inventory Service 向 Amazon 发送纠正 webhook，将其 available 降为 0。无超卖；Amazon 收到优雅的"刚刚售罄"信号。SQL 条件 UPDATE 是唯一真相来源。</span>
       </div>
+
+      <h3><span class="en">⑥ Reconciliation in depth — detecting &amp; correcting drift between Redis, the level table, and the ledger</span><span class="zh">⑥ 深入对账 —— 检测并纠正 Redis 缓存、inventory_level 表与流水账之间的漂移</span></h3>
+      <p class="en">At any moment three stores hold a view of the same physical stock: the Redis available-count cache, the <code>inventory_level</code> row (<code>on_hand</code>, <code>committed</code>, <code>reserved</code>), and the append-only <code>inventory_ledger</code>. The <strong>ledger is the audit truth</strong> — it is never updated in place, only appended to. The <code>inventory_level</code> row is a <em>materialized view</em>: <code>on_hand = SUM(ledger.delta WHERE reason IN ('receipt','return_restock',…))</code>, <code>committed = SUM(…)</code>, <code>reserved = SUM(…)</code>. The Redis cache is a further derived read-optimisation — it holds the computed <code>available = on_hand - committed - reserved</code> with a TTL. Because the level is derived and the cache is derived-from-derived, drift can accumulate through bugs, partial failures, or missed CDC events, and the system must detect and correct it without ever rewriting ledger history.</p>
+      <p class="zh">任何时刻，三个存储持有同一实物库存的视图：Redis available-count 缓存、<code>inventory_level</code> 行（<code>on_hand</code>、<code>committed</code>、<code>reserved</code>）以及仅追加的 <code>inventory_ledger</code>。<strong>流水账是审计真相</strong>——它从不原地更新，只追加。<code>inventory_level</code> 行是一个<em>物化视图</em>：<code>on_hand = SUM(ledger.delta WHERE reason IN ('receipt','return_restock',…))</code>，<code>committed</code>、<code>reserved</code> 同理。Redis 缓存是进一步派生的读优化——持有计算出的 <code>available = on_hand - committed - reserved</code> 并带有 TTL。由于 level 是派生的，缓存是派生的派生，漂移可能通过 bug、部分失败或遗漏的 CDC 事件积累，系统必须在不重写流水账历史的情况下检测并纠正它。</p>
+      <pre><code><span class="c">-- Step 1: re-derive level from ledger (ground truth)</span>
+<span class="k">SELECT</span>
+  variant_id, location_id,
+  <span class="k">SUM</span>(<span class="k">CASE WHEN</span> bucket = <span class="s">'on_hand'</span>    <span class="k">THEN</span> delta <span class="k">ELSE</span> <span class="n">0</span> <span class="k">END</span>) <span class="k">AS</span> derived_on_hand,
+  <span class="k">SUM</span>(<span class="k">CASE WHEN</span> bucket = <span class="s">'committed'</span>  <span class="k">THEN</span> delta <span class="k">ELSE</span> <span class="n">0</span> <span class="k">END</span>) <span class="k">AS</span> derived_committed,
+  <span class="k">SUM</span>(<span class="k">CASE WHEN</span> bucket = <span class="s">'reserved'</span>   <span class="k">THEN</span> delta <span class="k">ELSE</span> <span class="n">0</span> <span class="k">END</span>) <span class="k">AS</span> derived_reserved
+<span class="k">FROM</span>  inventory_ledger
+<span class="k">GROUP BY</span> variant_id, location_id;
+
+<span class="c">-- Step 2: compare to stored level; detect drift</span>
+<span class="c">-- If derived_on_hand != stored on_hand → drift detected</span>
+
+<span class="c">-- Step 3: post a COMPENSATING ledger entry (never edit history)</span>
+<span class="k">INSERT INTO</span> inventory_ledger
+  (variant_id, location_id, bucket, delta, reason,         created_at)
+<span class="k">VALUES</span>
+  (<span class="n">:vid</span>,       <span class="n">:lid</span>,         <span class="s">'on_hand'</span>, <span class="n">:drift</span>, <span class="s">'reconciliation_correction'</span>, <span class="k">NOW</span>());
+<span class="c">-- drift = derived_on_hand - stored on_hand (can be negative)</span>
+
+<span class="c">-- Step 4: update inventory_level to match</span>
+<span class="k">UPDATE</span> inventory_level
+<span class="k">SET</span>   on_hand = derived_on_hand,   <span class="c">-- or committed / reserved as needed</span>
+      version = version + <span class="n">1</span>
+<span class="k">WHERE</span> variant_id = <span class="n">:vid</span> <span class="k">AND</span> location_id = <span class="n">:lid</span>;
+
+<span class="c">-- Step 5: rebuild Redis cache from the now-correct level</span>
+<span class="c">-- SET inv:{vid}:{lid}  (on_hand - committed - reserved)  EX 60</span>
+<span class="c">-- Cache is always rebuilt from level, never from ledger directly</span></code></pre>
+      <p class="en">The reconciliation job runs on a schedule — every few minutes for high-velocity variants (flag set when daily adjustments &gt; threshold), hourly for cold variants. On detecting a mismatch it: (1) pages on-call with the magnitude and the affected (variant, location); (2) inserts the compensating ledger entry so the history remains complete and auditable — the correction is visible and attributed, not silently overwritten; (3) updates <code>inventory_level</code> to the recomputed values; (4) force-invalidates (DEL) the Redis key so the next read repopulates from the corrected level. The cache is <em>never</em> the reference — it is always rebuilt from <code>inventory_level</code>, which is always rebuilt from the ledger. This three-tier cascade means a cache bug is trivially fixed (DEL + repopulate), a level bug requires a compensating ledger entry, but a ledger corruption is a P0 incident — the ledger must be append-only and its rows must be immutable.</p>
+      <p class="zh">对账作业按计划运行——高频变体（当日调整次数超过阈值时设置标志）每几分钟一次，冷变体每小时一次。检测到不匹配时：(1) 附带偏差幅度和受影响的（变体、位置）呼叫值班人员；(2) 插入补偿流水账条目，使历史保持完整且可审计——纠正是可见且有归属的，不会被静默覆盖；(3) 将 <code>inventory_level</code> 更新为重新计算的值；(4) 强制失效（DEL）Redis 键，使下次读取从纠正后的 level 重新填充。缓存<em>永远</em>不是参考——它总是从 <code>inventory_level</code> 重建，后者总是从流水账重建。这种三层级联意味着：缓存 bug 可以简单修复（DEL + 重新填充），level bug 需要补偿流水账条目，而流水账损坏是 P0 事故——流水账必须是仅追加的，其行必须不可变。</p>
+      <div class="callout callout--danger">
+        <span class="ct"><span class="en">Why the ledger, not the level, is the source of truth</span><span class="zh">为什么流水账（而非 level 表）才是真相来源</span></span>
+        <span class="en">The <code>inventory_level</code> row is convenient but it is a <em>cached aggregate</em>. It can be reconstructed from the ledger at any point; the reverse is not true — you cannot reconstruct the ledger from the level alone. This asymmetry is the key: the ledger records <em>why</em> a unit moved (sale, return, manual edit, reconciliation correction), which is essential for merchant disputes, regulatory audits, and root-cause debugging. If a bug causes the level and the ledger to diverge, the ledger wins — the level is corrected to match the ledger, never the other way around. Keeping the ledger immutable and append-only is the non-negotiable invariant that makes the whole audit model trustworthy.</span>
+        <span class="zh"><code>inventory_level</code> 行虽然方便，但它是一个<em>缓存聚合</em>。它可以在任何时候从流水账重建；反之则不然——你无法仅从 level 表重建流水账。这种不对称性是关键：流水账记录了单位<em>为何</em>移动（销售、退货、手动编辑、对账纠正），这对商家争议、监管审计和根因调试至关重要。如果 bug 导致 level 表与流水账出现分歧，流水账胜出——level 表被纠正以匹配流水账，绝不反过来。保持流水账不可变和仅追加，是使整个审计模型可信的不可妥协的不变式。</span>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -905,6 +944,183 @@ body.zh .zh{display:revert;}
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table above is the at-a-glance summary. Below is the staff-level reasoning a candidate should be able to give for each row — the underlying tension, how each option actually works in this system, concrete pros and cons, and the decision rule for choosing one.</p>
+      <p class="zh">上表是速览摘要。下面是 staff 候选人应当能给出的详细推理——每行背后的核心矛盾、各选项在该系统中的实际运作方式、具体的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Consistency model per channel — strong everywhere vs. hybrid</span><span class="zh">① 各渠道一致性模型 —— 全部强一致 vs. 混合</span></h3>
+      <p class="en"><strong>The tension:</strong> Shopify's own checkout path must never oversell, which demands strong consistency on the decrement. But Shopify also fans out to Amazon, eBay, and POS — forcing all of them onto the same synchronous DB path multiplies write latency and couples the critical path to slow external webhooks.</p>
+      <p class="zh"><strong>矛盾点：</strong>Shopify 自有结账路径绝不能超卖，因此扣减需要强一致性。但 Shopify 同时还要向 Amazon、eBay 和 POS 扇出——若强迫所有渠道走同一条同步 DB 路径，写入延迟会成倍增加，并将关键路径与缓慢的外部 webhook 耦合在一起。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Strong consistency everywhere</span><span class="zh">方案 A · 全部强一致性</span></div>
+          <p class="en">Every channel — own storefront, POS, Amazon, eBay — reads and writes through the same serialized conditional UPDATE. No channel can see stale stock.</p>
+          <p class="zh">每个渠道——自有店面、POS、Amazon、eBay——都通过同一条串行化条件 UPDATE 读写库存。没有渠道能看到陈旧库存。</p>
+          <p class="en"><strong>+</strong> True single source of truth; cross-channel oversell is mathematically impossible because every decrement acquires the same row-level serialization.</p>
+          <p class="zh"><strong>+</strong> 真正的单一真相来源；跨渠道超卖在数学上不可能，因为每次扣减都获得同一行级串行化。</p>
+          <p class="en"><strong>−</strong> Every external webhook must wait for the DB write to confirm before returning; a slow Amazon API call is now on the Shopify checkout critical path. DB connection pool becomes a bottleneck across all channels simultaneously.</p>
+          <p class="zh"><strong>−</strong> 每个外部 webhook 都必须等 DB 写入确认才能返回；慢速 Amazon API 调用现在进入了 Shopify 结账关键路径。DB 连接池同时成为所有渠道的瓶颈。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Strong for own checkout; eventual for marketplaces</span><span class="zh">方案 B · 自有结账强一致；第三方平台最终一致</span></div>
+          <p class="en">The conditional SQL UPDATE is the only authority for the Shopify checkout path. After it succeeds, a Kafka CDC event fans out to a webhook worker that delivers inventory corrections to external channels asynchronously — typically within seconds.</p>
+          <p class="zh">条件 SQL UPDATE 仅对 Shopify 结账路径具有权威性。成功后，Kafka CDC 事件扇出到 webhook worker，异步向外部渠道推送库存纠正——通常在数秒内完成。</p>
+          <p class="en"><strong>+</strong> Own checkout stays fast and decoupled; external channels absorb lag they already expect (Amazon SLA for inventory sync is seconds, not µs). DB write path is unaffected by external channel availability.</p>
+          <p class="zh"><strong>+</strong> 自有结账保持快速且解耦；外部渠道接受它们本就预期的滞后（Amazon 库存同步 SLA 是秒级，不是微秒级）。DB 写路径不受外部渠道可用性影响。</p>
+          <p class="en"><strong>−</strong> A race window exists: Amazon and Shopify can both sell the "last" unit simultaneously because Amazon's cache is seconds stale. The conditional UPDATE is the arbiter — the losing channel gets 0 rows affected and must accept a correction webhook. This is a known and intentional design; the oversell guard still holds.</p>
+          <p class="zh"><strong>−</strong> 存在竞争窗口：Amazon 和 Shopify 可能同时卖出"最后一件"，因为 Amazon 的缓存有秒级陈旧。条件 UPDATE 是仲裁者——失败渠道得到 0 行受影响并必须接受纠正 webhook。这是已知且有意的设计；防超卖守卫依然成立。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Hybrid is the right answer for Shopify's reality.</strong> Own-checkout is the money path and demands the DB's serialization guarantee. External channels already operate on eventual consistency and have their own buffers; coupling them to the synchronous path would be an architectural mistake. The conditional UPDATE acting as global arbiter prevents oversell even in the hybrid model.</p>
+        <p class="zh"><strong>混合方案是 Shopify 现实情况下的正确答案。</strong>自有结账是核心收入路径，需要 DB 的串行化保证。外部渠道本就在最终一致性下运作并有自己的缓冲区；将它们耦合到同步路径将是架构上的错误。条件 UPDATE 作为全局仲裁者，即使在混合模型中也能防止超卖。</p>
+      </div>
+
+      <h3><span class="en">② Concurrency on hot SKU — pessimistic lock vs. optimistic conditional UPDATE</span><span class="zh">② 热点 SKU 并发 —— 悲观锁 vs. 乐观条件 UPDATE</span></h3>
+      <p class="en"><strong>The tension:</strong> you need to ensure "never decrement below zero" atomically. The two classical tools for this — locking the row pessimistically before reading vs. checking the condition inside the UPDATE — have very different performance profiles under concurrent load.</p>
+      <p class="zh"><strong>矛盾点：</strong>你需要原子性地保证"永不减到零以下"。两种经典工具——读之前悲观锁住行，还是在 UPDATE 内部做条件检查——在并发负载下有截然不同的性能特征。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Pessimistic lock (<code>SELECT FOR UPDATE</code>)</span><span class="zh">方案 A · 悲观锁（<code>SELECT FOR UPDATE</code>）</span></div>
+          <p class="en">Transaction opens, reads the row with <code>SELECT … FOR UPDATE</code> (acquires an exclusive lock), checks available in application code, then writes the decrement; lock is released on commit.</p>
+          <p class="zh">事务开启，用 <code>SELECT … FOR UPDATE</code> 读取行（获取排他锁），在应用代码中检查 available，然后写入扣减；提交时释放锁。</p>
+          <p class="en"><strong>+</strong> Correct by construction: the lock guarantees no other writer can observe the row between the read and the write. Application logic can do complex multi-step checks before writing.</p>
+          <p class="zh"><strong>+</strong> 设计上正确：锁保证读写之间没有其他写者能观察到该行。应用逻辑在写入前可做复杂的多步检查。</p>
+          <p class="en"><strong>−</strong> Every concurrent writer queues behind the exclusive lock on the same row. For a hot SKU with thousands of concurrent reservations the row becomes a hard serialization bottleneck — throughput collapses, lock wait times spike, and DB connection pool exhaustion is a real risk.</p>
+          <p class="zh"><strong>−</strong> 每个并发写者都在同一行的排他锁后面排队。对于有数千并发预留的热点 SKU，该行成为硬性串行化瓶颈——吞吐崩溃，锁等待时间飙升，DB 连接池耗尽是真实风险。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Optimistic conditional UPDATE</span><span class="zh">方案 B · 乐观条件 UPDATE</span></div>
+          <p class="en"><code>UPDATE inventory_level SET reserved=reserved+qty WHERE variant_id=? AND location_id=? AND (on_hand-committed-reserved) &gt;= qty</code>; the database engine evaluates the condition atomically inside the write, no separate lock acquisition.</p>
+          <p class="zh"><code>UPDATE inventory_level SET reserved=reserved+qty WHERE variant_id=? AND location_id=? AND (on_hand-committed-reserved) &gt;= qty</code>；数据库引擎在写操作内部原子地评估条件，无需单独获取锁。</p>
+          <p class="en"><strong>+</strong> No long-held lock: the DB row is locked only for the duration of the single UPDATE statement (microseconds), not for the application-round-trip time. Concurrency is far higher; writers don't block each other waiting for application logic.</p>
+          <p class="zh"><strong>+</strong> 无长时间锁持有：DB 行仅在单个 UPDATE 语句执行期间（微秒级）被锁定，而非在应用往返时间内。并发度大幅提高；写者不会因等待应用逻辑而互相阻塞。</p>
+          <p class="en"><strong>−</strong> Under extreme contention (thousands of concurrent attempts on one row) even the short-lived write-lock can pile up. At the absolute limit, escalate to the Redis atomic counter pattern from Q01. Also: cannot express complex cross-table checks inside a single UPDATE predicate.</p>
+          <p class="zh"><strong>−</strong> 在极端竞争下（单行数千并发尝试），即使短暂的写锁也会堆积。在绝对极限时，升级到 Q01 的 Redis 原子计数器模式。另外：无法在单个 UPDATE 谓词内表达跨表的复杂检查。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use optimistic conditional UPDATE as the default.</strong> For the normal inventory workload (hundreds of concurrent reservations at most), the single-statement approach is correct, fast, and requires no retry infrastructure. Reserve pessimistic locking only when the application must inspect and conditionally branch across multiple tables before writing — and even then, keep the transaction short. For extreme hot-SKU bursts (flash-sale scale), <strong>escalate to the Redis atomic counter</strong> from Q01: Redis gate absorbs the million-concurrent-attempt fan-in; the DB conditional UPDATE becomes the durable backstop with reconciliation.</p>
+        <p class="zh"><strong>乐观条件 UPDATE 作为默认选择。</strong>对于正常库存工作负载（最多数百并发预留），单语句方案正确、快速，无需重试基础设施。仅当应用必须在写入前跨多张表检查并条件分支时，才使用悲观锁——即便如此，也要保持事务短暂。对于极端热点 SKU 爆发（抢购规模），<strong>升级到 Q01 的 Redis 原子计数器</strong>：Redis 闸门吸收百万并发尝试的汇聚；DB 条件 UPDATE 成为带对账的持久化后盾。</p>
+      </div>
+
+      <h3><span class="en">③ Cache freshness vs. DB load — short TTL vs. CDC invalidation</span><span class="zh">③ 缓存新鲜度 vs. DB 负载 —— 短 TTL vs. CDC 失效</span></h3>
+      <p class="en"><strong>The tension:</strong> the Redis available-count cache serves millions of PDP reads per second and must never reflect phantom out-of-stock (or phantom in-stock). The question is how you keep it synchronized with the DB after every inventory write, and at what cost.</p>
+      <p class="zh"><strong>矛盾点：</strong>Redis available-count 缓存每秒为数百万次 PDP 读提供服务，绝不能反映幽灵缺货（或幽灵有货）。问题是如何在每次库存写入后保持它与 DB 同步，以及代价如何。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Short TTL (5 s) only</span><span class="zh">方案 A · 仅短 TTL（5 秒）</span></div>
+          <p class="en">Cache expires every 5 seconds; on miss the caller fetches from DB and repopulates. No explicit invalidation logic needed.</p>
+          <p class="zh">缓存每 5 秒过期；未命中时调用方从 DB 取值并重新填充。无需显式失效逻辑。</p>
+          <p class="en"><strong>+</strong> Simplest possible implementation: no producer-side write-through, no Kafka consumer, no invalidation race; if cache goes down, fallback to DB is automatic.</p>
+          <p class="zh"><strong>+</strong> 最简单的实现：无生产侧写透、无 Kafka 消费者、无失效竞争；缓存宕机时自动降级到 DB。</p>
+          <p class="en"><strong>−</strong> Up to 5 s stale: during a flash event or rapid sell-through the storefront can show "in stock" for 5 s after the last unit sold, generating frustrating "sold out at checkout" surprises. If the SKU is read millions of times in those 5 s, each miss hits the DB simultaneously (thundering herd on cache expiry).</p>
+          <p class="zh"><strong>−</strong> 最多 5 秒陈旧：在抢购活动或快速售罄期间，店面可能在最后一件售出后 5 秒内仍显示"有货"，造成"结账时售罄"的不满意外。若 SKU 在这 5 秒内被读取数百万次，每次未命中都会同时访问 DB（缓存过期时的惊群效应）。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Long TTL + CDC invalidation on every write</span><span class="zh">方案 B · 长 TTL + 每次写入时 CDC 失效</span></div>
+          <p class="en">Cache TTL is set long (e.g. 60 s); a Kafka CDC consumer listens for <code>inventory_level</code> row changes and immediately calls <code>DEL key</code> or <code>SET key newValue</code> in Redis after every DB write.</p>
+          <p class="zh">缓存 TTL 设置较长（如 60 秒）；Kafka CDC 消费者监听 <code>inventory_level</code> 行变更，在每次 DB 写入后立即在 Redis 中调用 <code>DEL key</code> 或 <code>SET key newValue</code>。</p>
+          <p class="en"><strong>+</strong> Cache staleness is bounded by the CDC propagation lag (typically &lt;1 s), not the TTL. Under a rapid sell-through, PDP readers see "sold out" within ~1 s of the last conditional UPDATE. Long TTL eliminates thundering herds on cold items since they almost never expire spontaneously.</p>
+          <p class="zh"><strong>+</strong> 缓存陈旧度受 CDC 传播延迟（通常 &lt;1 秒）限制，而非 TTL。快速售罄时，PDP 读者在最后一次条件 UPDATE 约 1 秒内看到"售罄"。长 TTL 消除了冷商品上的惊群效应，因为它们几乎不会自发过期。</p>
+          <p class="en"><strong>−</strong> Adds infrastructure: a running Kafka CDC pipeline and consumer. There is a small window between the DB commit and the CDC consumer processing the event where cache and DB can disagree. Write-after-invalidation races require careful handling (e.g. invalidation after a crash must not leave cache in an indefinitely stale state — the TTL acts as the final safety net).</p>
+          <p class="zh"><strong>−</strong> 增加基础设施：需要运行中的 Kafka CDC 管道和消费者。DB 提交与 CDC 消费者处理事件之间存在小窗口，缓存与 DB 可能不一致。失效后写入的竞争需要仔细处理（例如崩溃后的失效不能让缓存永久陈旧——TTL 充当最终安全网）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>CDC invalidation + fallback TTL is the production answer.</strong> Short-TTL-only is acceptable for low-velocity SKUs (seasonal items rarely sold). The moment you have high-velocity SKUs or flash events, a 5 s staleness window is customer-visible. The right design layers both: CDC invalidation provides near-real-time freshness; the TTL is the safety net that prevents indefinitely stale cache entries if the CDC consumer falls behind or crashes.</p>
+        <p class="zh"><strong>CDC 失效 + 兜底 TTL 是生产环境的正确答案。</strong>仅短 TTL 对低频 SKU（很少销售的季节性商品）可接受。一旦有高频 SKU 或抢购活动，5 秒陈旧窗口就会被用户感知。正确设计是两者叠加：CDC 失效提供近实时新鲜度；TTL 是安全网，防止 CDC 消费者滞后或崩溃时缓存条目永久陈旧。</p>
+      </div>
+
+      <h3><span class="en">④ Reserve at cart-add vs. checkout-start</span><span class="zh">④ 加购时预留 vs. 结账时预留</span></h3>
+      <p class="en"><strong>The tension:</strong> the moment you lock a unit in the <code>reserved</code> counter, other buyers can no longer purchase it. The question is whether that lock should happen when the buyer clicks "Add to cart" (early) or when they actually begin the checkout flow (late).</p>
+      <p class="zh"><strong>矛盾点：</strong>一旦你在 <code>reserved</code> 计数器中锁定一个单位，其他买家就无法再购买它。问题是这个锁应该在买家点击"加入购物车"时（早锁）还是在实际开始结账流程时（晚锁）发生。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Reserve at cart-add</span><span class="zh">方案 A · 加购时预留</span></div>
+          <p class="en">A unit is immediately added to <code>reserved</code> when the buyer adds the item to their cart, with a short TTL (e.g. 5 min).</p>
+          <p class="zh">买家将商品加入购物车时，立即将一个单位加入 <code>reserved</code>，并设置短 TTL（如 5 分钟）。</p>
+          <p class="en"><strong>+</strong> The buyer sees "this item is held for you" throughout the shopping session — no "item disappeared at checkout" surprise. Conversion rates improve for scarce items because buyers feel they have a slot.</p>
+          <p class="zh"><strong>+</strong> 买家在整个购物会话中看到"此商品为您保留"——无结账时商品消失的意外。稀缺商品的转化率提升，因为买家感觉自己有一个名额。</p>
+          <p class="en"><strong>−</strong> Window-shoppers and comparison-shopping browsers hold units for 5 minutes that could have been sold. High phantom-hold rate on popular SKUs artificially deflates the displayed available count, potentially showing "sold out" while units sit in abandoned carts.</p>
+          <p class="zh"><strong>−</strong> 浏览者和比价购物者会持有单位 5 分钟，这段时间本可销售。热门 SKU 上高幽灵预留率会人为压低显示的可用数量，可能在单位躺在被遗弃的购物车中时显示"售罄"。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Reserve at checkout-start</span><span class="zh">方案 B · 结账时预留</span></div>
+          <p class="en">No unit is locked in <code>reserved</code> until the buyer explicitly initiates checkout, at which point the conditional UPDATE fires with a longer TTL (e.g. 10–15 min).</p>
+          <p class="zh">在买家明确发起结账之前，不锁定任何单位到 <code>reserved</code>；此时条件 UPDATE 触发，TTL 更长（如 10–15 分钟）。</p>
+          <p class="en"><strong>+</strong> No phantom holds from casual browsers; <code>available</code> count is honest until the last moment. Simpler TTL management — one TTL tier instead of two. Works well for the vast majority of Shopify merchants where abandonment at cart is high but stock is not scarce.</p>
+          <p class="zh"><strong>+</strong> 无随意浏览者产生的幽灵预留；<code>available</code> 计数直到最后一刻都是真实的。TTL 管理更简单——一个 TTL 层而非两个。适用于绝大多数购物车放弃率高但库存不稀缺的 Shopify 商家。</p>
+          <p class="en"><strong>−</strong> A buyer who spent 10 minutes with an item in their cart may hit "sold out" at the checkout page because the stock sold during their browsing session — frustrating on high-demand launches.</p>
+          <p class="zh"><strong>−</strong> 将商品放在购物车里浏览 10 分钟的买家可能在结账页面遇到"售罄"，因为库存在其浏览期间已售出——在高需求商品发布时体验很差。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Checkout-start is the right default</strong> for the general Shopify merchant base — stock is usually abundant and phantom holds hurt availability accuracy more than they help conversion. <strong>Offer cart-add reservation as an opt-in</strong> (configurable per launch) for high-demand product drops where protecting the "sold for you" experience is worth the phantom-hold cost; use an aggressive 5-minute TTL so abandoned carts drain quickly.</p>
+        <p class="zh"><strong>结账时预留是一般 Shopify 商家群体的正确默认值</strong>——库存通常充足，幽灵预留对可用性准确度的损害大于对转化率的帮助。<strong>将加购时预留作为可选功能</strong>（按发布活动配置）提供给高需求商品发布场景，此时保护"为您锁定"体验值得付出幽灵预留的代价；使用积极的 5 分钟 TTL，以便被遗弃的购物车快速释放。</p>
+      </div>
+
+      <h3><span class="en">⑤ Single available counter vs. three-counter model</span><span class="zh">⑤ 单一 available 计数器 vs. 三计数器模型</span></h3>
+      <p class="en"><strong>The tension:</strong> a single <code>available</code> column is the simplest possible representation — one number, one write, one read. But inventory movements have semantically distinct reasons (physical stock on hand vs. order commitments vs. checkout holds), and collapsing them loses information that is valuable for audit, reconciliation, and debugging.</p>
+      <p class="zh"><strong>矛盾点：</strong>单一 <code>available</code> 列是最简单的表示——一个数字、一次写入、一次读取。但库存变动有语义上截然不同的原因（实物在手 vs. 订单承诺 vs. 结账预留），将它们合并会丢失对审计、对账和调试都有价值的信息。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Single <code>available</code> counter</span><span class="zh">方案 A · 单一 <code>available</code> 计数器</span></div>
+          <p class="en">One column stores the current sellable count; every event (sale, return, receipt, hold, release) is a direct delta to that column.</p>
+          <p class="zh">一列存储当前可售数量；每个事件（销售、退货、收货、预留、释放）都是对该列的直接增量。</p>
+          <p class="en"><strong>+</strong> Minimal schema, minimal write path: one conditional decrement is the entire reserve operation. Easiest to reason about for simple merchants.</p>
+          <p class="zh"><strong>+</strong> 最小化 schema，最简写路径：一次条件扣减就是完整的预留操作。对简单商家最易理解。</p>
+          <p class="en"><strong>−</strong> After a dispute ("why do I have 3 units when I expected 5?") you cannot determine whether units are in-transit, in active checkouts, or genuinely missing without querying an external audit table. Reconciliation is also harder — you can't verify the number is correct by summing the underlying components.</p>
+          <p class="zh"><strong>−</strong> 发生争议（"为什么我预期 5 件却显示 3 件？"）后，如果不查询外部审计表，你无法确定单位是在途中、在活跃结账中还是真正丢失。对账也更难——你无法通过对底层组成求和来验证数字是否正确。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · <code>on_hand / committed / reserved</code> (available derived)</span><span class="zh">方案 B · <code>on_hand / committed / reserved</code>（available 派生）</span></div>
+          <p class="en"><code>available</code> is never stored — it is always computed as <code>on_hand - committed - reserved</code>. Each counter maps to a distinct business state: physical receipt/return events touch <code>on_hand</code>; order placement and fulfilment touch <code>committed</code>; checkout sessions touch <code>reserved</code>.</p>
+          <p class="zh"><code>available</code> 从不存储——始终作为 <code>on_hand - committed - reserved</code> 计算得出。每个计数器映射到不同的业务状态：实物收货/退货事件影响 <code>on_hand</code>；下单和履约影响 <code>committed</code>；结账会话影响 <code>reserved</code>。</p>
+          <p class="en"><strong>+</strong> Any "why is my count wrong?" question can be decomposed: is it committed to unfulfilled orders? Held in active checkouts? Or genuinely missing? Combined with the ledger, every unit has a full traceable lineage. Reconciliation is structural — just recompute the derived value and compare.</p>
+          <p class="zh"><strong>+</strong> 任何"为什么我的数量不对？"都可以分解：是被未履约订单占用？被活跃结账持有？还是真正丢失？结合流水账，每个单位都有完整可追溯的谱系。对账是结构性的——只需重新计算派生值并比较。</p>
+          <p class="en"><strong>−</strong> Three columns to update transactionally instead of one; application code must route events to the correct counter; more complex conditional UPDATE predicate. Slightly higher schema cognitive load for engineers unfamiliar with the model.</p>
+          <p class="zh"><strong>−</strong> 需要在事务中更新三列而非一列；应用代码必须将事件路由到正确的计数器；条件 UPDATE 谓词更复杂。对不熟悉该模型的工程师来说 schema 认知负担略高。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Three counters are non-negotiable at Shopify's trust-and-safety bar.</strong> The single counter is fine for a toy or MVP, but the moment merchants dispute stock figures — and they will — you need to decompose the causes. The reconciliation job (ledger sum vs. level) cannot work without the component counters. A single-counter system would require a separate audit table to recover the same information, which is more complexity, not less.</p>
+        <p class="zh"><strong>在 Shopify 的信任与安全标准下，三计数器是不可妥协的。</strong>单计数器对玩具项目或 MVP 可以，但一旦商家开始争议库存数字——这必然会发生——你就需要分解原因。没有组件计数器，对账作业（流水账求和 vs. level 表）就无法运作。单计数器系统需要独立的审计表来恢复同样的信息，复杂度反而更高。</p>
+      </div>
+
+      <h3><span class="en">⑥ Channel sync: push webhooks vs. pull polling</span><span class="zh">⑥ 渠道同步：推送 webhook vs. 拉取轮询</span></h3>
+      <p class="en"><strong>The tension:</strong> inventory changes inside Shopify must propagate to external channels like Amazon and eBay. The system can either <em>push</em> changes out (Kafka fan-out → webhook to channel) or let channels <em>pull</em> changes on a schedule (periodic API calls). These have opposing tradeoffs on freshness, coupling, and infrastructure complexity.</p>
+      <p class="zh"><strong>矛盾点：</strong>Shopify 内部的库存变更必须传播到 Amazon、eBay 等外部渠道。系统可以<em>推送</em>变更（Kafka 扇出 → webhook 到渠道），也可以让渠道按计划<em>拉取</em>变更（定期 API 调用）。两者在新鲜度、耦合和基础设施复杂度上有相反的权衡。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Push (Kafka fan-out → webhooks)</span><span class="zh">方案 A · 推送（Kafka 扇出 → webhook）</span></div>
+          <p class="en">After every successful <code>inventory_level</code> write, a CDC event lands in Kafka; a fan-out worker consumes it and delivers an inventory-update webhook to each subscribed external channel within seconds.</p>
+          <p class="zh">每次成功写入 <code>inventory_level</code> 后，CDC 事件进入 Kafka；扇出 worker 消费它并在数秒内向每个订阅的外部渠道推送库存更新 webhook。</p>
+          <p class="en"><strong>+</strong> Near-real-time propagation — channels receive the update event-driven rather than waiting for their next poll cycle. During a sell-through, Amazon's listing is corrected in ~1–2 s rather than ~5–15 min.</p>
+          <p class="zh"><strong>+</strong> 近实时传播——渠道以事件驱动方式接收更新，而非等待下一个轮询周期。售罄期间，Amazon 的商品列表在约 1–2 秒内得到纠正，而非 5–15 分钟。</p>
+          <p class="en"><strong>−</strong> Fan-out infrastructure must be maintained; webhook delivery is at-least-once and requires retries, deduplication on the receiver side, and dead-letter handling. Shopify owns the push; if a channel's webhook endpoint goes down, the burden of retrying and backpressure is on Shopify.</p>
+          <p class="zh"><strong>−</strong> 扇出基础设施必须维护；webhook 推送是至少一次语义，需要重试、接收端去重和死信处理。Shopify 负责推送；若渠道的 webhook 端点宕机，重试和背压的负担在 Shopify 这侧。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Pull (channels poll Shopify API)</span><span class="zh">方案 B · 拉取（渠道轮询 Shopify API）</span></div>
+          <p class="en">External channels call the Shopify Inventory API on a schedule (every N minutes) and diff against their local copy to detect changes.</p>
+          <p class="zh">外部渠道按计划（每 N 分钟）调用 Shopify Inventory API，并与本地副本做差异对比以检测变更。</p>
+          <p class="en"><strong>+</strong> Simple from Shopify's side: no Kafka pipeline, no fan-out worker, no webhook retry machinery. If a channel goes down, it just misses one cycle and catches up on the next poll — natural backpressure absorption.</p>
+          <p class="zh"><strong>+</strong> 从 Shopify 一侧简单：无 Kafka 管道、无扇出 worker、无 webhook 重试机制。若渠道宕机，它只是错过一个周期，下次轮询时追上——自然背压吸收。</p>
+          <p class="en"><strong>−</strong> Inherently laggy by the poll interval — in a flash sell-through that interval (e.g. 5–15 min) is an oversell window on external platforms. N channels × M merchants × M variants polling simultaneously generates enormous read QPS on the inventory API that must be rate-limited and cached.</p>
+          <p class="zh"><strong>−</strong> 固有的轮询间隔延迟——在快速售罄中，该间隔（如 5–15 分钟）是外部平台上的超卖窗口。N 个渠道 × M 个商家 × M 个变体同时轮询会在库存 API 上产生巨大的读取 QPS，必须进行速率限制和缓存。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Push for owned integrations (Shopify Markets, POS, first-party apps)</strong> where you control both ends and the infrastructure investment is justified. <strong>Allow pull for third-party integrations</strong> where the channel demands it or the integration is low-volume — but enforce explicit rate limits (e.g. per-shop per-channel limits) and serve the pull endpoint from Redis cache, never the primary DB. For high-velocity channels, push should be the strong default.</p>
+        <p class="zh"><strong>自有集成（Shopify Markets、POS、第一方应用）使用推送</strong>——你控制两端，基础设施投入是值得的。<strong>允许第三方集成使用拉取</strong>——渠道要求这样做或集成量小时——但强制执行明确的速率限制（如每商家每渠道限制），并从 Redis 缓存提供拉取端点，绝不访问主 DB。对于高频渠道，推送应是强默认值。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

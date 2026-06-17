@@ -889,6 +889,40 @@ body.zh .zh{display:revert;}
         <span class="ct"><span class="en">Giant-merchant skew</span><span class="zh">巨型商户的流量倾斜</span></span>
         <span class="en">A whale merchant (say, a Flash Sale merchant doing 5% of platform volume) will overwhelm any shared shard. Three escalating options: (1) move the shop to a lightly loaded shard; (2) give the shop a shard with no other tenants (but still inside a shared pod); (3) give the shop a fully dedicated pod with its own resources, deploy cadence, and SLA. Option 3 is "Shopify Plus on dedicated infrastructure" — a product upsell, not just an ops trick.</span><span class="zh">一个鲸鱼商户（如大促商户占平台 5% 的交易量）会压垮任何共享 shard。三个递进选项：(1) 将 shop 迁移到负载较轻的 shard；(2) 给 shop 一个没有其他租户的专属 shard（但仍在共享 Pod 内）；(3) 给 shop 一个完全专用的 Pod，拥有独立资源、发布节奏和 SLA。选项 3 就是"Shopify Plus 专用基础设施"——是产品升级，不只是运维手段。</span>
       </div>
+
+      <h3><span class="en">⑥ Per-tenant resource isolation — stopping one noisy shop from starving a pod</span><span class="zh">⑥ 每租户资源隔离——防止单个扰邻 shop 饿死整个 Pod</span></h3>
+      <p class="en">A Pod bounds the blast radius so that a problem in one Pod cannot hurt shops in a different Pod. But within a Pod, a single shop hammering its shard can still exhaust the shared MySQL connection pool and CPU for every other shop in that same Pod. The problem is a classic <strong>noisy-neighbor</strong> at the intra-pod level: the Pod gives you outer containment, but you still need inner fairness.</p>
+      <p class="zh">Pod 限制了爆炸半径，使某个 Pod 的问题不会影响其他 Pod 上的 shop。但在 Pod 内部，单个 shop 疯狂打压自己的 shard，仍然会耗尽同 Pod 所有其他 shop 共享的 MySQL 连接池和 CPU。这是经典的<strong>扰邻问题</strong>在 Pod 内部的体现：Pod 提供了外层容纳，但你仍然需要内层公平。</p>
+      <pre><code><span class="c">-- ProxySQL per-shop concurrency rule (simplified)</span>
+<span class="c">-- Enforce a max_conn cap per shop_id at the proxy layer,</span>
+<span class="c">-- before requests reach MySQL.</span>
+
+<span class="k">INSERT INTO</span> mysql_query_rules (rule_id, active, match_digest, proxy_addr,
+                                  destination_hostgroup, max_conn_per_user)
+<span class="k">VALUES</span> (
+  <span class="n">1000</span>,          <span class="c">-- rule_id</span>
+  <span class="n">1</span>,             <span class="c">-- active</span>
+  <span class="s">'SELECT|INSERT|UPDATE|DELETE'</span>,  <span class="c">-- match any DML</span>
+  <span class="s">'%'</span>,           <span class="c">-- any proxy address</span>
+  <span class="n">10</span>,            <span class="c">-- route to hostgroup 10 (shard primary)</span>
+  <span class="n">20</span>             <span class="c">-- cap: max 20 simultaneous connections per shop_id</span>
+);
+
+<span class="c">-- Requests over the cap are queued with a short timeout.</span>
+<span class="c">-- If timeout expires: return HTTP 429 (retriable) to app layer.</span>
+<span class="c">-- The shop is throttled; MySQL never sees the excess connections.</span></code></pre>
+      <p class="en">The proxy layer (ProxySQL or equivalent) enforces a per-<code>shop_id</code> concurrency cap <em>before</em> connections reach MySQL. Requests over the cap are queued with a short timeout; if the timeout expires they are returned as a retriable <code>429 Too Many Requests</code> to the application. MySQL never sees the excess connections. Complement this with three additional mitigations:</p>
+      <p class="zh">代理层（ProxySQL 或等效组件）在连接到达 MySQL <em>之前</em>强制执行每 <code>shop_id</code> 的并发上限。超过上限的请求在代理层排队并设短超时；超时后以可重试的 <code>429 Too Many Requests</code> 返回给应用层。MySQL 永远看不到这些多余的连接。在此基础上，用三个额外手段加以补充：</p>
+      <ul>
+        <li><span class="en"><strong>Per-shop rate limiting at the application layer</strong> (before requests reach the proxy): each shop is allocated a per-minute API budget (e.g. 10k calls/min for Shopify Plus). Excess is throttled at the app server with a <code>429</code> before touching the DB at all.</span><span class="zh"><strong>应用层每 shop 速率限制</strong>（请求到达代理之前）：每个 shop 分配每分钟 API 配额（如 Shopify Plus 每分钟 10k 次调用）。超出部分在应用服务器层以 <code>429</code> 限流，完全不触达 DB。</span></li>
+        <li><span class="en"><strong>Fair scheduling / weighted queues</strong>: when the shard connection pool is under pressure, the proxy dispatches queued requests in a fair round-robin across shops rather than FIFO — preventing one shop from head-of-line-blocking all others.</span><span class="zh"><strong>公平调度 / 加权队列</strong>：当 shard 连接池承压时，代理在各 shop 之间以公平轮询（而非 FIFO）调度排队请求——防止单个 shop 队头阻塞所有其他 shop。</span></li>
+        <li><span class="en"><strong>Escalation to a dedicated pod</strong>: if a shop <em>persistently</em> saturates its per-shop concurrency cap or triggers slow-query alerts, the metrics are a signal to invoke the Online Shop Mover and relocate the shop to a dedicated pod with a larger, independently-sized connection pool. The Pod's blast-radius guarantee means the shop's chronic load is already contained to this Pod's shops — but escalation removes even that residual impact.</span><span class="zh"><strong>升级到专用 Pod</strong>：若某个 shop <em>持续</em>打满每 shop 并发上限或触发慢查询告警，这些指标就是调用 Online Shop Mover 的信号，将该 shop 迁移到拥有更大、独立配置连接池的专用 Pod。Pod 的爆炸半径保证意味着该 shop 的长期高负载已被限制在本 Pod 的 shop 范围内——而升级操作则彻底消除这一残余影响。</span></li>
+      </ul>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Isolation is both a fairness and a blast-radius tool</span><span class="zh">隔离同时是公平性工具和爆炸半径工具</span></span>
+        <p class="en">The per-shop concurrency cap does double duty. First, it is a <strong>fairness mechanism</strong>: it ensures that a shop with a burst of traffic cannot take a disproportionate share of the shared connection pool, leaving other shops starved. Second, it is a <strong>blast-radius limiter within the Pod</strong>: even if a shop has a runaway query or a bug that triggers a flood of DB requests, the cap bounds how much damage that shop can inflict on its Pod-mates before the proxy throttles it. Pods contain the blast radius across Pods; per-shop caps contain it within a Pod.</p>
+        <p class="zh">每 shop 并发上限具有双重作用。第一，它是<strong>公平性机制</strong>：确保流量突增的 shop 无法占用不成比例的共享连接池，从而让其他 shop 陷入资源匮乏。第二，它是 <strong>Pod 内部的爆炸半径限制器</strong>：即使某个 shop 出现失控查询或 bug 导致 DB 请求洪峰，上限也能限制该 shop 在被代理限流之前能对 Pod 内伙伴造成的破坏程度。Pod 在 Pod 之间限制爆炸半径；每 shop 上限在 Pod 内部限制爆炸半径。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -935,6 +969,184 @@ body.zh .zh{display:revert;}
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their exact pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Tenancy model — shared-table vs shard-per-group</span><span class="zh">① 租户模型 —— 共享表 vs 每组独立 shard</span></h3>
+      <p class="en"><strong>The tension:</strong> how physically separate must tenant data be — just a column filter, or an entirely different MySQL instance?</p>
+      <p class="zh"><strong>矛盾点：</strong>租户数据需要多大程度的物理隔离——仅加一列过滤，还是完全独立的 MySQL 实例？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Shared-table (<code>shop_id</code> column)</span><span class="zh">方案 A · 共享表（<code>shop_id</code> 列）</span></div>
+          <p class="en">Every tenant lives in the same schema; rows are discriminated by a <code>shop_id</code> column. One DB cluster, one set of migrations.</p>
+          <p class="zh">所有租户共用同一 schema；行数据通过 <code>shop_id</code> 列区分。只有一个 DB 集群，一套迁移。</p>
+          <p class="en"><strong>+</strong> Cheapest and simplest to start: one schema to migrate, one connection pool to size, trivial to add a tenant.</p>
+          <p class="zh"><strong>+</strong> 最便宜、最简单：只需迁移一个 schema，只需调整一个连接池，添加租户零成本。</p>
+          <p class="en"><strong>−</strong> Zero physical isolation: a single runaway query from one shop can hold row-locks that stall every other shop on the same instance. A bad index can degrade every tenant's latency simultaneously. Connection-pool exhaustion by one shop affects all.</p>
+          <p class="zh"><strong>−</strong> 零物理隔离：某个 shop 的一条失控查询可能持有行锁，导致同实例上其他所有 shop 的请求被阻塞。一个坏索引会同时拉高所有租户的延迟。某个 shop 耗尽连接池就会影响所有人。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Shard-per-group (Shopify's choice)</span><span class="zh">方案 B · 每组独立 shard（Shopify 的选择）</span></div>
+          <p class="en">Each MySQL instance owns a fixed set of shops. A shop's data is entirely within one shard; incidents stay within that shard's group of shops.</p>
+          <p class="zh">每个 MySQL 实例归属一组固定的 shop。一个 shop 的数据完全在一个 shard 内；故障被限制在该 shard 所属的 shop 范围内。</p>
+          <p class="en"><strong>+</strong> Strong blast-radius containment at the DB layer — not just application layer. Enables per-pod deploy cadence, independent scaling, and whale isolation. Schema count remains bounded (~1,000 shards vs 3 M shops).</p>
+          <p class="zh"><strong>+</strong> 在 DB 层面（而非仅应用层）提供强爆炸半径限制。支持每 Pod 独立发布节奏、独立扩容和鲸鱼商户隔离。schema 数量有界（约 1,000 个 shard，而非 3M 个 shop）。</p>
+          <p class="en"><strong>−</strong> Higher ops overhead: ~1,000 MySQL instances to monitor, patch, and back up. Requires a shard-routing layer (shard map + caching) that itself must be highly available. More complex application bootstrap.</p>
+          <p class="zh"><strong>−</strong> 运维开销更高：约 1,000 个 MySQL 实例需要监控、打补丁和备份。需要一个本身必须高可用的 shard 路由层（shard map + 缓存）。应用初始化更复杂。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en">Shared-table is a fine starting point up to ~10k tenants where incidents are rare and the blast radius is acceptable. Beyond that, or when any single tenant generates disproportionate load, the inability to physically isolate becomes unacceptable. Shopify at 3 M shops cannot use DB-per-tenant (millions of instances) or schema-per-tenant (ALTER TABLE across 3 M schemas is unworkable) — <strong>shard-per-group is the only model that scales to millions of tenants while keeping blast radius bounded.</strong></p>
+        <p class="zh">共享表在约 1 万租户以内是合理的起点，此时故障概率低，爆炸半径可接受。超过这个规模，或某个租户产生不成比例的负载时，无法物理隔离就变得难以接受。Shopify 有 3M 个 shop，既无法用每租户独立 DB（数百万实例），也无法用每租户独立 schema（跨 3M schema 执行 ALTER TABLE 根本不现实）——<strong>每组独立 shard 是唯一既能扩展到数百万租户又能限制爆炸半径的模型。</strong></p>
+      </div>
+
+      <h3><span class="en">② Shard key — <code>shop_id</code> vs other keys</span><span class="zh">② Shard key —— <code>shop_id</code> vs 其他键</span></h3>
+      <p class="en"><strong>The tension:</strong> what key do you hash or range-partition on — maximizing data locality per tenant, or maximizing even distribution across shards?</p>
+      <p class="zh"><strong>矛盾点：</strong>按什么键做哈希或范围分区——最大化每个租户的数据局部性，还是最大化各 shard 之间的分布均匀度？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · <code>shop_id</code> (tenant-aligned)</span><span class="zh">方案 A · <code>shop_id</code>（与租户对齐）</span></div>
+          <p class="en">All data for one shop (orders, products, customers, fulfillments) lives on one shard. Every hot-path query is <code>WHERE shop_id = X</code> and touches exactly one shard.</p>
+          <p class="zh">一个 shop 的所有数据（订单、商品、客户、履约）都在同一个 shard 上。所有热路径查询都是 <code>WHERE shop_id = X</code>，且只触达一个 shard。</p>
+          <p class="en"><strong>+</strong> Perfect data locality — zero cross-shard joins for any shop-scoped operation; this is the vast majority of Shopify's traffic. Enables per-tenant ops: move, isolate, and scale one shop independently.</p>
+          <p class="zh"><strong>+</strong> 完美的数据局部性——任何 shop 范围内的操作都无需跨 shard join；这是 Shopify 绝大多数流量的形态。支持以租户为单位的运维：独立迁移、隔离和扩展某个 shop。</p>
+          <p class="en"><strong>−</strong> Skew: a whale shop generates vastly more load than an average shop on the same shard. Must be handled by moving the whale to a dedicated shard/pod — the routing layer makes this possible.</p>
+          <p class="zh"><strong>−</strong> 倾斜：鲸鱼商户产生的负载远高于同 shard 上的普通 shop。必须通过将鲸鱼商户迁移到专用 shard/Pod 来处理——路由层使这成为可能。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Other keys (e.g., <code>customer_id</code>, <code>order_id</code>)</span><span class="zh">方案 B · 其他键（如 <code>customer_id</code>、<code>order_id</code>）</span></div>
+          <p class="en">Partition by an entity-level key that distributes more evenly across shards.</p>
+          <p class="zh">按分布更均匀的实体级键进行分区。</p>
+          <p class="en"><strong>+</strong> Better statistical distribution; less skew from large shops; each shard holds a slice of every tenant's data.</p>
+          <p class="zh"><strong>+</strong> 统计分布更均匀；大 shop 产生的倾斜更小；每个 shard 持有每个租户的部分数据。</p>
+          <p class="en"><strong>−</strong> Every shop-scoped query (e.g., "list all orders for shop X") must scatter across all shards and gather results — introducing fan-out, higher latency, and a dependency on every shard's availability for a single shop's request. Per-tenant isolation and migration become operationally infeasible.</p>
+          <p class="zh"><strong>−</strong> 每个 shop 范围内的查询（如"列出 shop X 的所有订单"）都必须对所有 shard 散射收集——引入扇出、更高延迟，且对单个 shop 的请求产生对所有 shard 可用性的依赖。以租户为单位的隔离和迁移在运维上变得不可行。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Always use <code>shop_id</code> for Shopify-like workloads.</strong> Shopify's traffic is inherently shop-scoped: a buyer visiting a store, a merchant reviewing orders, an app querying products — all are naturally bounded by <code>shop_id</code>. The skew problem (whale shops) is real but solved at the routing layer (hot-shop migration / dedicated pods), not by fragmenting data across shards. Fragmenting would poison every hot-path query with a scatter-gather.</p>
+        <p class="zh"><strong>对 Shopify 这类工作负载，始终用 <code>shop_id</code>。</strong>Shopify 的流量天然以 shop 为范围：买家访问商店、商家查看订单、应用查询商品——全部天然受 <code>shop_id</code> 约束。倾斜问题（鲸鱼商户）是真实存在的，但应在路由层解决（热 shop 迁移 / 专用 Pod），而不是把数据打散到各 shard。打散数据会让每条热路径查询都变成散射收集。</p>
+      </div>
+
+      <h3><span class="en">③ Shard routing strategy — lookup table vs consistent hashing</span><span class="zh">③ Shard 路由策略 —— 查询表 vs 一致性哈希</span></h3>
+      <p class="en"><strong>The tension:</strong> should the assignment of a shop to a shard be computed by a deterministic hash function, or stored in an explicit mutable table?</p>
+      <p class="zh"><strong>矛盾点：</strong>shop 到 shard 的分配应由确定性哈希函数计算，还是存储在可变的显式表中？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Lookup table</span><span class="zh">方案 A · 查询表</span></div>
+          <p class="en">A global <code>shop_shard_map</code> table stores the explicit <code>shop_id → shard_id → pod_id</code> mapping. A routing service (L1 process cache → L2 Redis → L3 DB) resolves it on every request.</p>
+          <p class="zh">全局 <code>shop_shard_map</code> 表存储显式的 <code>shop_id → shard_id → pod_id</code> 映射。路由服务（L1 进程缓存 → L2 Redis → L3 DB）在每次请求时解析。</p>
+          <p class="en"><strong>+</strong> Fully flexible: you can move any individual shop to any shard at any time with a single row update + cache invalidation. This is what makes hot-shop evacuation, GDPR pinning, and whale isolation operationally practical. The map is also a control plane for migrations and feature flags.</p>
+          <p class="zh"><strong>+</strong> 完全灵活：任何时候只需更新一行并使缓存失效，就能将任意 shop 迁移到任意 shard。这使得热 shop 撤离、GDPR 锁定和鲸鱼商户隔离在运维上切实可行。shard map 同时也是迁移和功能开关的控制平面。</p>
+          <p class="en"><strong>−</strong> The lookup service itself must be highly available — it is on every hot path. Requires L1/L2 caching with careful invalidation, especially during migrations. A stale entry during a live migration can send writes to the wrong shard.</p>
+          <p class="zh"><strong>−</strong> 查询服务本身必须高可用——它处于每条热路径上。需要 L1/L2 缓存并谨慎处理失效，在迁移期间尤为关键。迁移期间的陈旧条目可能导致写入路由到错误的 shard。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Consistent hashing</span><span class="zh">方案 B · 一致性哈希</span></div>
+          <p class="en"><code>shard = hash(shop_id) % N</code> (or a ring variant). No lookup service needed; every app server computes the shard independently.</p>
+          <p class="zh"><code>shard = hash(shop_id) % N</code>（或环形变体）。无需查询服务；每个应用服务器独立计算 shard。</p>
+          <p class="en"><strong>+</strong> Zero-latency routing (pure computation); no lookup service to run or fail; perfectly consistent across all app servers without coordination.</p>
+          <p class="zh"><strong>+</strong> 零延迟路由（纯计算）；无需运行或维护查询服务；无需协调即可在所有应用服务器间保持完全一致。</p>
+          <p class="en"><strong>−</strong> Moving a shop is nearly impossible: the hash permanently binds a shop to a shard unless you accept data migration for every resharding event. Adding or removing shards rebalances the ring, potentially moving a large fraction of all shops simultaneously — an operational nightmare. Whale isolation (dedicating a shard/pod to one shop) is architecturally incompatible.</p>
+          <p class="zh"><strong>−</strong> 迁移 shop 几乎不可能：哈希将 shop 永久绑定到 shard，除非每次重新分片都接受数据迁移。增加或删除 shard 会重新平衡环，可能同时迁移大量 shop——运维噩梦。鲸鱼商户隔离（将一个 shard/Pod 专用于某个 shop）与此架构存在根本性冲突。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use a lookup table.</strong> The ability to move individual shops between shards is non-negotiable for operational health at Shopify's scale — it is the mechanism that handles whale isolation, GDPR residency, hot-pod rebalancing, and capacity planning. Consistent hashing trades away that flexibility for routing simplicity, a trade-off that fails the moment you need to move one shop. The lookup cost is eliminated by caching (L1 warm hits are sub-microsecond).</p>
+        <p class="zh"><strong>用查询表。</strong>能够在 shard 之间单独迁移 shop 是 Shopify 规模下运维健康的不可妥协能力——它是处理鲸鱼商户隔离、GDPR 数据驻留、热 Pod 再平衡和容量规划的核心机制。一致性哈希以路由简单性换取了这种灵活性，这种权衡在需要迁移一个 shop 时就会失效。查询开销通过缓存消除（L1 热命中是亚微秒级）。</p>
+      </div>
+
+      <h3><span class="en">④ Isolation granularity — Pods vs one giant shared cluster</span><span class="zh">④ 隔离粒度 —— Pod vs 单一大型共享集群</span></h3>
+      <p class="en"><strong>The tension:</strong> should the infrastructure above the shard level be divided into many self-contained failure domains, or consolidated into one large cluster for simplicity?</p>
+      <p class="zh"><strong>矛盾点：</strong>shard 层之上的基础设施应划分为多个自包含故障域，还是合并成一个大集群以求简单？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Pods (Shopify's choice)</span><span class="zh">方案 A · Pod（Shopify 的选择）</span></div>
+          <p class="en">Each Pod is a self-contained failure domain: it bundles its own app servers, MySQL shards, Redis, and job workers for a fixed set of shops. Nothing a Pod does can directly harm shops on a different Pod.</p>
+          <p class="zh">每个 Pod 是一个自包含的故障域：为固定的一组 shop 捆绑自己的应用服务器、MySQL shard、Redis 和任务 worker。一个 Pod 的任何行为都无法直接影响其他 Pod 上的 shop。</p>
+          <p class="en"><strong>+</strong> Hard blast-radius bound: a Pod incident (DB crash, bad deploy, OOM) affects only its shops — typically 1–5% of the fleet. Independent deploy cadence enables canary rollouts at Pod granularity. Independent scaling: over-provisioned Pods for whale merchants. Dedicated Pods as a product tier (Shopify Plus).</p>
+          <p class="zh"><strong>+</strong> 硬性爆炸半径限制：Pod 故障（DB 崩溃、错误发布、OOM）只影响其内的 shop——通常是总量的 1–5%。独立发布节奏支持以 Pod 为粒度的金丝雀发布。独立扩容：为鲸鱼商户提供超配的 Pod。专用 Pod 作为产品层级（Shopify Plus）。</p>
+          <p class="en"><strong>−</strong> More infra units to operate, monitor, and maintain. Cross-pod operations (e.g., global analytics) require explicit tooling. Provisioning a new Pod has a higher minimum cost than adding shards to a shared cluster.</p>
+          <p class="zh"><strong>−</strong> 需要运维、监控和维护的基础设施单元更多。跨 Pod 操作（如全局分析）需要显式工具支持。新增一个 Pod 的最低成本高于向共享集群添加 shard。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · One giant shared cluster</span><span class="zh">方案 B · 单一大型共享集群</span></div>
+          <p class="en">All shards live inside one large, shared infrastructure cluster. Routing is by shard only; there is no Pod-level grouping.</p>
+          <p class="zh">所有 shard 都在一个大型共享基础设施集群内。只按 shard 路由，没有 Pod 级别的分组。</p>
+          <p class="en"><strong>+</strong> Simpler operational model: one fleet to manage, monitor and scale. Easier global visibility into cluster health. Lower minimum overhead per tenant.</p>
+          <p class="zh"><strong>+</strong> 更简单的运维模型：一个集群来管理、监控和扩缩容。更容易获得集群健康的全局视图。每租户的最低开销更低。</p>
+          <p class="en"><strong>−</strong> Any cluster-level failure (a bad deploy to the shared app-server fleet, a network partition, a misconfigured load balancer) affects every tenant simultaneously. No blast-radius containment above the shard. Impossible to give a tenant a different deploy cadence or SLA tier without architectural changes.</p>
+          <p class="zh"><strong>−</strong> 任何集群级故障（共享应用服务器集群的错误发布、网络分区、负载均衡器配置错误）都会同时影响所有租户。shard 层之上没有爆炸半径限制。不经过架构改造，无法给某个租户提供不同的发布节奏或 SLA 层级。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use Pods.</strong> Blast-radius containment is a hard requirement for Shopify's SLA — one bad deploy or DB crash should never take down all merchants. A single shared cluster is a single point of failure above the shard level. The operational overhead of Pods amortizes over tooling and is worth it: the ability to do canary Pod rollouts and isolate whale merchants in dedicated Pods are operational capabilities that pay for themselves in reduced incident scope and faster deploys.</p>
+        <p class="zh"><strong>用 Pod。</strong>爆炸半径限制是 Shopify SLA 的硬性要求——一次错误发布或 DB 崩溃绝不能让所有商家下线。单一共享集群在 shard 层之上是单点故障。Pod 的运维开销会被工具化摊销，是值得的：金丝雀 Pod 发布和将鲸鱼商户隔离在专用 Pod 中的能力，通过降低故障影响范围和加快发布速度来回报这些投入。</p>
+      </div>
+
+      <h3><span class="en">⑤ Shop migration mechanism — logical replication (binlog tail) vs synchronous dual-write</span><span class="zh">⑤ Shop 迁移机制 —— 逻辑复制（binlog 追尾）vs 同步双写</span></h3>
+      <p class="en"><strong>The tension:</strong> when moving a shop's data from one shard to another while it is live, how do you keep source and target in sync during the transition window?</p>
+      <p class="zh"><strong>矛盾点：</strong>在 shop 保持上线状态时将其数据从一个 shard 迁移到另一个，如何在过渡窗口内保持源和目标的数据同步？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Logical replication (binlog tail) — Shopify's approach</span><span class="zh">方案 A · 逻辑复制（binlog 追尾）——Shopify 的方式</span></div>
+          <p class="en">Snapshot the shop's rows to the target shard, then tail the source MySQL binlog (filtered to this shop's rows) to replay all changes until lag is near-zero; briefly freeze writes (&lt;2 s); verify checksums; atomically flip the shard map.</p>
+          <p class="zh">将 shop 的行快照到目标 shard，然后追踪源 MySQL binlog（过滤出该 shop 的行）并重放所有变更直至延迟接近零；短暂冻结写入（&lt;2 秒）；校验 checksum；原子切换 shard map。</p>
+          <p class="en"><strong>+</strong> Write downtime ≤ 2 seconds. The source shard handles all traffic during snapshot + catch-up; the app is unaware. Works with any ORM; no application code changes. Battle-tested pattern (used by Shopify, GitHub, and others with gh-ost/pt-osc).</p>
+          <p class="zh"><strong>+</strong> 写入停机时间 ≤ 2 秒。快照和追尾期间，源 shard 处理所有流量；应用层无感知。适用于任何 ORM；无需修改应用代码。经过实战检验的模式（Shopify、GitHub 等均使用 gh-ost/pt-osc）。</p>
+          <p class="en"><strong>−</strong> Requires CDC infrastructure (Debezium or direct binlog client) and a careful freeze-verify-flip protocol. Stale shard-map cache entries during the freeze window can cause writes to land on the now-frozen source — must return retriable 503s and drain L1/L2 before flipping.</p>
+          <p class="zh"><strong>−</strong> 需要 CDC 基础设施（Debezium 或直连 binlog 客户端）以及严谨的冻结-验证-切换协议。冻结窗口期间的陈旧 shard map 缓存条目可能导致写入落到已冻结的源 shard——必须返回可重试的 503 并在切换前排空 L1/L2。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Synchronous dual-write</span><span class="zh">方案 B · 同步双写</span></div>
+          <p class="en">The application writes every mutation to both source and target shards simultaneously during the migration window; once caught up, flip the shard map and stop writing to source.</p>
+          <p class="zh">迁移窗口期间，应用层将每次变更同步写入源和目标两个 shard；追上后切换 shard map 并停止写入源端。</p>
+          <p class="en"><strong>+</strong> No freeze window required — the target is always current. Simple conceptually.</p>
+          <p class="zh"><strong>+</strong> 无需冻结窗口——目标始终是最新的。概念上简单。</p>
+          <p class="en"><strong>−</strong> Every write is now a distributed transaction across two shards — double the write latency, double the chance of partial failure. A partial write (success on source, failure on target or vice versa) creates divergence that is hard to detect and reconcile. Application code must be aware of the migration state. Bugs in the dual-write logic are write-path bugs with data-loss potential.</p>
+          <p class="zh"><strong>−</strong> 每次写入现在是跨两个 shard 的分布式事务——写延迟翻倍，部分失败的概率翻倍。部分写入（源成功、目标失败，或反之）会造成难以检测和修复的数据分歧。应用代码必须感知迁移状态。双写逻辑中的 bug 是写路径 bug，有数据丢失的风险。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Logical replication (binlog tail) is the right choice.</strong> Dual-write multiplies write-path complexity and failure modes at the most dangerous moment — when you're already doing a live migration. The binlog approach keeps the write path unchanged (one shard, normal latency) and uses a CDC stream to catch up the target asynchronously. The brief freeze-and-flip is a feature, not a bug: it forces an explicit, auditable point-in-time consistency check. Use gh-ost or pt-online-schema-change for the CDC tooling; both are battle-tested at this exact use case.</p>
+        <p class="zh"><strong>逻辑复制（binlog 追尾）是正确的选择。</strong>双写在最危险的时刻——正在进行实时迁移时——成倍增加了写路径的复杂性和故障模式。binlog 方式使写路径保持不变（单 shard，正常延迟），并使用 CDC 流异步追赶目标。短暂的冻结-切换是优点而非缺点：它强制执行一个明确的、可审计的时间点一致性检查。使用 gh-ost 或 pt-online-schema-change 作为 CDC 工具；两者在这一确切场景中均经过实战检验。</p>
+      </div>
+
+      <h3><span class="en">⑥ Cross-shop data access — live scatter-gather vs CDC to derived columnar store</span><span class="zh">⑥ 跨 shop 数据访问 —— 实时散射收集 vs CDC 推送到派生列式存储</span></h3>
+      <p class="en"><strong>The tension:</strong> analytics and admin tooling need to query across every shop — but shards were designed to be isolated. How do you reconcile cross-tenant access with the blast-radius isolation you worked hard to build?</p>
+      <p class="zh"><strong>矛盾点：</strong>分析与管理工具需要跨所有 shop 查询——但 shard 是为隔离而设计的。如何在跨租户访问与精心构建的爆炸半径隔离之间取得平衡？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Live scatter-gather across all shards</span><span class="zh">方案 A · 对所有 shard 实时散射收集</span></div>
+          <p class="en">Fan out the query to all ~1,000 shards in parallel, aggregate results in a coordinator, return the combined result.</p>
+          <p class="zh">将查询并行扇出到所有约 1,000 个 shard，在协调器中聚合结果并返回。</p>
+          <p class="en"><strong>+</strong> Real-time data — no propagation lag. Simple mental model: "query everything".</p>
+          <p class="zh"><strong>+</strong> 实时数据——无传播延迟。心智模型简单："查询一切"。</p>
+          <p class="en"><strong>−</strong> One slow shard, one Pod incident, or one overloaded replica stalls the entire query — the analytics path becomes a dependency on every shard's health simultaneously. Connection fan-out at scale (1,000 parallel DB connections per query) risks connection-pool exhaustion on every shard. Completely violates blast-radius isolation: a reporting query can destabilize production traffic. No caching possible on live data.</p>
+          <p class="zh"><strong>−</strong> 一个慢 shard、一个 Pod 故障或一个过载副本就会阻塞整个查询——分析路径同时依赖每个 shard 的健康状态。规模化下的连接扇出（每次查询 1,000 个并行 DB 连接）有在每个 shard 上耗尽连接池的风险。完全违反了爆炸半径隔离：一个报表查询可能破坏生产流量的稳定性。无法对实时数据进行缓存。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · CDC to derived columnar store (Shopify's approach)</span><span class="zh">方案 B · CDC 推送到派生列式存储（Shopify 的方式）</span></div>
+          <p class="en">A CDC pipeline (Debezium tailing each shard's binlog → Kafka → columnar consumer) continuously replicates transactional data to ClickHouse, BigQuery, or Snowflake, partitioned by <code>shop_id</code>. All cross-shop queries run against the columnar store.</p>
+          <p class="zh">CDC 管道（Debezium 追踪每个 shard 的 binlog → Kafka → 列式消费者）持续将事务数据复制到 ClickHouse、BigQuery 或 Snowflake，按 <code>shop_id</code> 分区。所有跨 shop 查询都针对列式存储执行。</p>
+          <p class="en"><strong>+</strong> Completely isolated from the transactional pods — a slow analytics query never touches a MySQL shard. Full-table scans are cheap on columnar storage. The derived store can be scaled, replicated, and optimized independently. Typical lag 1–5 minutes, acceptable for all reporting use cases.</p>
+          <p class="zh"><strong>+</strong> 与事务 Pod 完全隔离——慢分析查询永远不会触达 MySQL shard。列式存储上的全表扫描成本低廉。派生存储可以独立扩展、复制和优化。典型延迟 1–5 分钟，对所有报表场景均可接受。</p>
+          <p class="en"><strong>−</strong> Not real-time — 1–5 min lag means it cannot serve "did this order just ship?" (use the shard map to route that single-shop query to its pod instead). CDC pipeline is additional infra to operate and monitor. Schema changes require updating the CDC consumer's mapping.</p>
+          <p class="zh"><strong>−</strong> 非实时——1–5 分钟延迟意味着无法回答"这笔订单刚刚发货了吗？"（改用 shard map 将该单 shop 查询路由到其 Pod）。CDC 管道是额外需要运维和监控的基础设施。schema 变更需要更新 CDC 消费者的映射。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>CDC to derived store — always.</strong> Scatter-gather must never be on the hot path: it creates a hidden dependency on the health of every shard simultaneously and demolishes the blast-radius isolation that Pods were designed to provide. Use the CDC-fed columnar store for all analytics and batch reporting. For near-real-time shop-scoped admin lookups, route directly to the correct pod via the shard map — that is a single-shard, single-shop query and is safe on the hot path.</p>
+        <p class="zh"><strong>CDC 推送到派生存储——始终如此。</strong>散射收集绝不能在热路径上：它会隐式依赖所有 shard 的健康状态，并彻底破坏 Pod 旨在提供的爆炸半径隔离。所有分析和批量报表都使用 CDC 驱动的列式存储。对于需要接近实时的 shop 级管理查询，通过 shard map 直接路由到正确的 Pod——那是单 shard、单 shop 的查询，在热路径上是安全的。</p>
+      </div>
+
     </section>
 
     <!-- 8 FOLLOW-UPS -->

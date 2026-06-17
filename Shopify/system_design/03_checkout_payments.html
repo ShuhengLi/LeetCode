@@ -953,6 +953,35 @@ body.zh .zh{display:revert;}
         <li><span class="en"><strong>PSP routing</strong>: some PSPs have regional endpoints (e.g., Stripe EU). Route EU checkouts to the EU Stripe endpoint to satisfy data processing agreements.</span><span class="zh"><strong>PSP 路由</strong>：部分 PSP 有地域端点（如 Stripe EU）。将 EU 结账路由到 Stripe EU 端点，以满足数据处理协议要求。</span></li>
         <li><span class="en"><strong>Inventory coordination</strong>: a globally distributed inventory service (see Q02) is consulted during the saga's reserve step. The reservation is durable in the inventory service; the checkout region only holds the saga state.</span><span class="zh"><strong>库存协调</strong>：Saga 的预留步骤会咨询全局分布式库存服务（见 Q02）。预留状态在库存服务中持久化；结账地域仅持有 saga 状态。</span></li>
       </ul>
+
+      <h3><span class="en">⑦ The checkout saga timeline &amp; compensation</span><span class="zh">⑦ 结账 saga 时序与补偿</span></h3>
+      <p class="en">The checkout saga is a sequence of five forward steps, each with a corresponding compensating action. The key insight is that compensations must run in <strong>reverse order</strong> — you cannot void an authorization before you have tried to persist the order, and you cannot release inventory before you know the authorization failed. The orchestrator's durable state machine guarantees exactly-once progression and makes the right compensation choice based on which step last succeeded.</p>
+      <p class="zh">结账 saga 是五个正向步骤的序列，每个步骤都有对应的补偿操作。关键洞察是补偿必须以<strong>逆序</strong>运行——在尝试持久化订单之前不能作废授权，在知道授权失败之前不能释放库存。编排器的持久化状态机保证了精确一次的推进，并根据最后成功的步骤做出正确的补偿选择。</p>
+      <pre><code><span class="c">-- Happy path (left column) and compensating actions if a LATER step fails (right column)</span>
+<span class="c">-- Compensation runs in reverse: step N compensation fires before step N-1 compensation.</span>
+
+<span class="k">Step 1</span>  <span class="s">reserve_inventory</span>(cartItems)          <span class="c">→ compensation: release_inventory(reservationId)</span>
+   <span class="k">if ok</span> ↓
+<span class="k">Step 2</span>  <span class="s">authorize_payment</span>(token, amount)        <span class="c">→ compensation: void_authorization(authRef)</span>
+   <span class="k">if ok</span> ↓
+<span class="k">Step 3</span>  <span class="s">persist_order</span>(order + outbox, same txn)  <span class="c">→ compensation: mark_order_CANCELLED (never DELETE)</span>
+   <span class="k">if ok</span> ↓
+<span class="k">Step 4</span>  <span class="s">capture_payment</span>(authRef)                <span class="c">→ compensation: refund(captureRef)   [post-capture only]</span>
+   <span class="k">if ok</span> ↓
+<span class="k">Step 5</span>  <span class="s">emit_order_confirmed</span>(via outbox)         <span class="c">→ compensation: emit_order_cancelled</span>
+
+<span class="c">-- Example: Step 3 fails after Step 2 succeeded → run in reverse: void_authorization, then release_inventory</span>
+<span class="c">-- Example: Step 4 fails after Step 3 succeeded → mark_order CANCELLED + void_authorization + release_inventory</span>
+<span class="c">-- Example: Step 4 succeeds but Step 5 relay is slow → outbox relay retries; emit is idempotent on orderId</span></code></pre>
+
+      <p class="en"><strong>Orchestration vs choreography for compensations:</strong> with <strong>orchestration</strong>, the saga orchestrator holds the current step in its own DB (<code>saga_state</code> row keyed by <code>checkoutId</code>). On failure it reads its own state, knows exactly which steps completed, and calls compensations in reverse with full context (the <code>authRef</code>, <code>reservationId</code>, etc. it captured earlier). With <strong>choreography</strong>, each service must react to a <code>saga.failed</code> event and infer whether <em>its</em> step ran from the event payload — fragile when the payload is incomplete or events arrive out of order. For checkout — where a compensation failure (e.g. void never confirmed) must be escalated to a human alert — orchestration is strongly preferred: the orchestrator's state row is the single source of truth for "where did this saga die and what still needs compensating."</p>
+      <p class="zh"><strong>补偿的编排 vs 编舞：</strong>使用<strong>编排</strong>时，saga 编排器将当前步骤保存在自己的 DB 中（以 <code>checkoutId</code> 为键的 <code>saga_state</code> 行）。失败时它读取自己的状态，精确知道哪些步骤已完成，并携带完整上下文（之前捕获的 <code>authRef</code>、<code>reservationId</code> 等）按逆序调用补偿。使用<strong>编舞</strong>时，每个服务必须对 <code>saga.failed</code> 事件做出反应，并从事件 payload 中推断<em>它自己的</em>步骤是否已运行——当 payload 不完整或事件乱序到达时非常脆弱。对于结账——补偿失败（如作废授权从未被确认）必须升级为人工告警——强烈推荐编排：编排器的状态行是"这个 saga 在哪里崩溃以及什么还需要补偿"的唯一事实来源。</p>
+
+      <div class="callout callout--warn">
+        <span class="ct"><span class="en">Compensations must be idempotent and keyed by reservationId / orderId</span><span class="zh">补偿必须是幂等的，并以 reservationId / orderId 为键</span></span>
+        <p class="en">The saga orchestrator may retry a compensation if the first attempt times out — e.g., <code>void_authorization</code> may be called twice if the PSP response is lost. Each compensation must therefore be idempotent: <code>void(authRef)</code> on an already-voided authorization must return success, not an error. Use the <code>reservationId</code> or <code>orderId</code> as the idempotency key when calling downstream services, and forward it to the PSP just as you do for forward-path calls. A compensation that is not idempotent can refund or release inventory twice — which is a financial error in the opposite direction from oversell.</p>
+        <p class="zh">如果第一次尝试超时，saga 编排器可能会重试补偿——例如，如果 PSP 响应丢失，<code>void_authorization</code> 可能被调用两次。因此每个补偿必须是幂等的：对已作废授权调用 <code>void(authRef)</code> 必须返回成功，而非错误。在调用下游服务时使用 <code>reservationId</code> 或 <code>orderId</code> 作为幂等键，并像正向路径调用一样将其转发给 PSP。不幂等的补偿可能会重复退款或重复释放库存——这是与超卖方向相反的财务错误。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -999,6 +1028,184 @@ body.zh .zh{display:revert;}
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their real pros and cons, and the rule for choosing one over the other.</p>
+      <p class="zh">上表是一眼速览版。下面是 Staff 候选人应当能讲出的完整推理：每一行为什么存在两个选项、各自真实的优缺点，以及做出选择的判断标准。</p>
+
+      <h3><span class="en">① Idempotency store durability — Redis-only vs DB-backed</span><span class="zh">① 幂等存储持久性——仅 Redis vs DB 兜底</span></h3>
+      <p class="en"><strong>The tension:</strong> the idempotency lookup must be microsecond-fast on every checkout completion, but losing a key on a Redis crash means a retry can double-charge the buyer. Speed and durability are in direct conflict.</p>
+      <p class="zh"><strong>矛盾点：</strong>每次结账完成都要对幂等键做微秒级查找，但 Redis 崩溃导致键丢失，会让重试时对买家重复扣款。速度与持久性直接对立。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Redis only</span><span class="zh">方案 A · 仅 Redis</span></div>
+          <p class="en">Store the idempotency record exclusively in Redis with a 24-hour TTL; lookups are single-digit µs and impose no DB load.</p>
+          <p class="zh">将幂等记录独家存储在 Redis 中，设置 24 小时 TTL；查找延迟为个位数微秒级，对数据库无额外负载。</p>
+          <p class="en"><strong>+</strong> Blazing fast at any QPS; no extra DB round-trip; trivially horizontally scalable.</p>
+          <p class="zh"><strong>+</strong> 任何 QPS 下都极快；不增加 DB 往返；水平扩展毫无压力。</p>
+          <p class="en"><strong>−</strong> Redis is volatile: an unclean failover or a maxmemory eviction silently deletes the key. The next retry sees "not found" and proceeds to re-charge the buyer — a silent double-charge with no log trail. AOF/RDB reduce but do not eliminate the window.</p>
+          <p class="zh"><strong>−</strong> Redis 易失：非正常故障切换或 maxmemory 驱逐会静默删除键。下一次重试看到"未找到"便继续扣款——一次无日志记录的静默重复扣款。AOF/RDB 缩小但无法消除这一窗口。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · DB only</span><span class="zh">方案 B · 仅 DB</span></div>
+          <p class="en">Write the <code>idempotency_record</code> row to Postgres before any downstream action; every lookup is a DB read (~5 ms).</p>
+          <p class="zh">在任何下游操作之前将 <code>idempotency_record</code> 行写入 Postgres；每次查找都是 DB 读取（约 5 ms）。</p>
+          <p class="en"><strong>+</strong> Durable and transactional; survives crashes, failovers, and evictions; auditable history for every idempotency decision.</p>
+          <p class="zh"><strong>+</strong> 持久且事务性；能在崩溃、故障切换和驱逐后存活；每条幂等决策均有可审计历史记录。</p>
+          <p class="en"><strong>−</strong> 5 ms added to every <code>/complete</code> call; at 30k checkout/s peak that is an extra ~150k DB reads/s — meaningful load increase; DB becomes a hot single point for fast-path idempotency.</p>
+          <p class="zh"><strong>−</strong> 每次 <code>/complete</code> 调用增加 5 ms；峰值 3 万结账/秒时约增加 15 万次/秒的 DB 读取——负载明显增加；DB 成为快速路径幂等性的热点单一依赖。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use both, write DB first.</strong> Write the durable <code>idempotency_record</code> to the DB before starting the saga, then populate Redis as a fast cache. On lookup, check Redis first; on a miss, fall back to the DB. This way a Redis loss degrades performance (extra DB reads) but never silently enables a double-charge. The DB record is also the audit trail required by PCI DSS.</p>
+        <p class="zh"><strong>两者兼用，先写 DB。</strong>在启动 saga 之前先将持久化的 <code>idempotency_record</code> 写入 DB，再将 Redis 作为快速缓存填充。查找时先检查 Redis；未命中时回退到 DB。这样 Redis 丢失只会降低性能（额外 DB 读取），而永远不会静默地允许重复扣款。DB 记录也是 PCI DSS 要求的审计轨迹。</p>
+      </div>
+
+      <h3><span class="en">② Saga pattern — orchestration vs choreography</span><span class="zh">② Saga 模式——编排 vs 编舞</span></h3>
+      <p class="en"><strong>The tension:</strong> a checkout involves at least four services (Inventory, Payment, Order, Fulfillment). How do you coordinate them — with a central conductor that knows every step, or by having each service react to the previous service's event?</p>
+      <p class="zh"><strong>矛盾点：</strong>结账涉及至少四个服务（库存、支付、订单、履单）。如何协调它们——用知道每个步骤的中央协调器，还是让每个服务对上一个服务的事件做出反应？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Orchestration</span><span class="zh">方案 A · 编排</span></div>
+          <p class="en">A Saga Orchestrator service drives the steps in order: reserve → authorize → create-order → capture → confirm. It knows the full state and owns all compensation logic.</p>
+          <p class="zh">Saga 编排器服务按顺序驱动各步骤：预留 → 授权 → 创建订单 → 扣款 → 确认。它知晓完整状态，并持有全部补偿逻辑。</p>
+          <p class="en"><strong>+</strong> Explicit, debuggable — you can query the orchestrator's DB to see exactly which step a saga is on; compensation is deterministic; operational visibility is clear; easy to add a new step.</p>
+          <p class="zh"><strong>+</strong> 显式、可调试——可以查询编排器的 DB 来精确了解 saga 处于哪个步骤；补偿具有确定性；操作可见性清晰；新增步骤容易。</p>
+          <p class="en"><strong>−</strong> The orchestrator is a shared coupling point — all services depend on it; adding a new service requires modifying the orchestrator; can become a bottleneck under very high throughput.</p>
+          <p class="zh"><strong>−</strong> 编排器是共享耦合点——所有服务都依赖它；新增服务需要修改编排器；在非常高的吞吐量下可能成为瓶颈。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Choreography</span><span class="zh">方案 B · 编舞</span></div>
+          <p class="en">Each service listens for an event from the previous step and emits its own event on completion. No central conductor: Inventory emits <code>inventory.reserved</code>, Payment picks it up and emits <code>payment.authorized</code>, and so on.</p>
+          <p class="zh">每个服务监听上一步骤的事件，完成后发出自己的事件。没有中央协调器：Inventory 发出 <code>inventory.reserved</code>，Payment 接收它并发出 <code>payment.authorized</code>，以此类推。</p>
+          <p class="en"><strong>+</strong> Services are loosely coupled and independently deployable; adding a new consumer requires no changes to existing services; naturally scales with Kafka partitions.</p>
+          <p class="zh"><strong>+</strong> 服务松耦合且可独立部署；新增消费者不需要更改现有服务；随 Kafka 分区自然扩展。</p>
+          <p class="en"><strong>−</strong> When step 2 fails mid-saga, which service owns the compensation? The answer is spread across multiple event handlers — very hard to trace a partial failure ("charged but no order") through distributed logs; difficult to prevent duplicate compensations racing; overall saga state is implicit, not queryable.</p>
+          <p class="zh"><strong>−</strong> 当第 2 步在 saga 中途失败时，谁负责补偿？答案分散在多个事件处理器中——通过分布式日志追踪部分失败（"已扣款但无订单"）非常困难；难以防止多个补偿操作竞争；总体 saga 状态是隐式的，无法直接查询。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Orchestration for payment sagas.</strong> When real money is involved, you need to know exactly which step failed so you can compensate correctly. A stale Kafka event log is insufficient for debugging "we charged the customer but never created an order." Reserve choreography for read-side fan-out (notifications, analytics) where a missed event is low-stakes and retries are simple.</p>
+        <p class="zh"><strong>支付 saga 使用编排。</strong>涉及真实资金时，必须精确知道哪一步失败才能正确补偿。陈旧的 Kafka 事件日志不足以调试"我们对客户扣了款但从未创建订单"。编舞模式留给读侧扇出（通知、数据分析），那里遗漏事件风险低且重试简单。</p>
+      </div>
+
+      <h3><span class="en">③ Payment capture timing — synchronous vs async</span><span class="zh">③ 扣款时机——同步 vs 异步</span></h3>
+      <p class="en"><strong>The tension:</strong> do you capture (debit the buyer's card) at the moment they click Pay, or hold an authorization and capture later when the item ships? The right answer varies by merchant type and has significant failure-mode implications.</p>
+      <p class="zh"><strong>矛盾点：</strong>是在买家点击支付的那一刻扣款（借记买家银行卡），还是先持有授权，在商品发货时再扣款？正确答案因商家类型而异，并对失败模式有重大影响。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Sync capture at checkout</span><span class="zh">方案 A · 结账时同步扣款</span></div>
+          <p class="en">Authorization and capture happen in the same PSP round-trip (or in two sequential calls with a negligible gap) at the moment the buyer confirms payment.</p>
+          <p class="zh">授权和扣款在买家确认付款的瞬间通过同一次 PSP 往返完成（或在两次连续调用中以可忽略的间隔完成）。</p>
+          <p class="en"><strong>+</strong> Simplest saga: no open authorizations to track or let expire; no async capture job to operate; the payment is finalized at the same moment the order is created.</p>
+          <p class="zh"><strong>+</strong> Saga 最简单：没有需要跟踪或让其到期的开放授权；无需运行异步扣款任务；支付在订单创建的同一时刻完成终结。</p>
+          <p class="en"><strong>−</strong> If fulfillment later fails (item out of stock, courier issue), you must issue a refund rather than simply voiding an auth — refunds take days and incur processing fees; poor UX for pre-orders or made-to-order goods.</p>
+          <p class="zh"><strong>−</strong> 如果履单后来失败（商品缺货、快递问题），你必须发起退款而非简单地作废授权——退款需要数天且产生手续费；对预售或定制商品的用户体验差。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Authorize now, async capture at fulfillment</span><span class="zh">方案 B · 立即授权，履单时异步扣款</span></div>
+          <p class="en">At checkout, authorize (reserve funds on the card) but do not yet capture. A worker triggers <code>psp.capture(authRef)</code> when the <code>order.fulfilled</code> event fires, typically hours or days later.</p>
+          <p class="zh">结账时授权（在银行卡上预留资金）但不立即扣款。当 <code>order.fulfilled</code> 事件触发时（通常数小时或数天后），worker 调用 <code>psp.capture(authRef)</code>。</p>
+          <p class="en"><strong>+</strong> If the item never ships, just void the auth — no money ever moved, no refund fees, instant for the buyer; ideal for pre-orders, ship-then-bill, and high-value physical goods.</p>
+          <p class="zh"><strong>+</strong> 如果商品从未发货，只需作废授权——资金从未转移，无退款手续费，对买家即时生效；非常适合预售、先发货后收费和高价值实物商品。</p>
+          <p class="en"><strong>−</strong> Card authorizations expire in 7–30 days (card network rules); if fulfillment is delayed, you must re-authorize which can fail if the buyer's card changed; adds an async capture job that must be durable, retryable, and monitored for stale auths.</p>
+          <p class="zh"><strong>−</strong> 银行卡授权在 7–30 天后过期（银行卡网络规则）；如果履单延迟，必须重新授权，可能因买家银行卡变更而失败；增加了一个必须持久化、可重试且需监控过期授权的异步扣款任务。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Make it a per-merchant config.</strong> Default to sync capture for digital goods and instant-fulfillment merchants (simplest, no open-auth complexity). Use async capture for physical goods merchants who need ship-then-bill, pre-order merchants, and high-value items where avoiding refund fees matters. The saga orchestrator handles both by checking the merchant's capture mode before deciding whether to call <code>psp.capture</code> inline or emit a deferred capture event.</p>
+        <p class="zh"><strong>做成按商家可配置。</strong>对数字商品和即时履单商家默认使用同步扣款（最简单，无开放授权复杂性）。对需要先发货后收费的实物商品商家、预售商家以及需要避免退款手续费的高价值商品使用异步扣款。Saga 编排器在决定是内联调用 <code>psp.capture</code> 还是发出延迟扣款事件之前，先检查商家的扣款模式，从而同时处理两种情况。</p>
+      </div>
+
+      <h3><span class="en">④ Order write consistency — strong vs availability-first</span><span class="zh">④ 订单写入一致性——强一致性 vs 可用性优先</span></h3>
+      <p class="en"><strong>The tension:</strong> the order row is the money source of truth — it must be durable. But waiting for synchronous replication acknowledgment doubles write latency. How much consistency overhead is justified?</p>
+      <p class="zh"><strong>矛盾点：</strong>订单行是资金的事实来源——它必须持久。但等待同步复制确认会使写入延迟翻倍。多大的一致性开销是合理的？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Strong consistency (sync replication ack)</span><span class="zh">方案 A · 强一致性（同步复制确认）</span></div>
+          <p class="en">The primary waits for at least one replica to acknowledge the write before returning success. Postgres synchronous standby or <code>synchronous_commit = on</code>.</p>
+          <p class="zh">主库在返回成功之前等待至少一个副本确认写入。Postgres 同步备库或 <code>synchronous_commit = on</code>。</p>
+          <p class="en"><strong>+</strong> Even if the primary crashes immediately after returning, the order row survives on the replica; zero data loss for committed orders; the financial ledger is never rolled back by a failover.</p>
+          <p class="zh"><strong>+</strong> 即使主库在返回后立即崩溃，订单行也在副本上保存；已提交订单零数据丢失；财务账本永远不会因故障切换而回滚。</p>
+          <p class="en"><strong>−</strong> ~2–4 ms added per write (cross-datacenter round-trip to replica); if the standby is slow or unreachable, writes stall; some availability sacrificed for durability.</p>
+          <p class="zh"><strong>−</strong> 每次写入增加约 2–4 ms（到副本的跨数据中心往返）；如果备库慢或不可达，写入会停顿；牺牲了部分可用性换取持久性。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Availability-first (async replication)</span><span class="zh">方案 B · 可用性优先（异步复制）</span></div>
+          <p class="en">Write to the primary only; replication to replicas is async. Return success as soon as the primary disk write completes.</p>
+          <p class="zh">仅写入主库；向副本的复制是异步的。主库磁盘写入完成后立即返回成功。</p>
+          <p class="en"><strong>+</strong> Lowest write latency; availability is unaffected by replica lag or network hiccups; fine for non-financial tables.</p>
+          <p class="zh"><strong>+</strong> 写入延迟最低；可用性不受副本延迟或网络抖动影响；对非财务表完全适用。</p>
+          <p class="en"><strong>−</strong> If the primary crashes between the <code>COMMIT</code> and the replica sync, the order row is lost on failover — the buyer was charged but there is no order; the worst possible inconsistency for a financial system.</p>
+          <p class="zh"><strong>−</strong> 如果主库在 <code>COMMIT</code> 与副本同步之间崩溃，故障切换时订单行丢失——买家已扣款但订单不存在；这是金融系统最糟糕的不一致情况。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Strong consistency for order and payment writes; async replication for everything else.</strong> The 2–4 ms overhead on the money path is a small price to pay for never losing a committed order. For order history reads, event logs, analytics, and non-financial tables, async replication is fine — a buyer reading a slightly stale order history is not a correctness violation.</p>
+        <p class="zh"><strong>订单和支付写入使用强一致性；其他一切使用异步复制。</strong>资金路径上 2–4 ms 的额外开销是绝不丢失已提交订单的小代价。对于订单历史读取、事件日志、分析和非财务表，异步复制完全可以——买家读到略微过时的订单历史不是正确性违规。</p>
+      </div>
+
+      <h3><span class="en">⑤ PSP strategy — single PSP vs multi-PSP failover</span><span class="zh">⑤ PSP 策略——单一 PSP vs 多 PSP 故障转移</span></h3>
+      <p class="en"><strong>The tension:</strong> a second PSP integration means extra engineering cost, routing logic, contract negotiation, and idempotency key namespace management. But a single PSP outage during BFCM is an existential revenue event. How much redundancy is worth building?</p>
+      <p class="zh"><strong>矛盾点：</strong>引入第二个 PSP 意味着额外的工程成本、路由逻辑、合同谈判以及 idempotency key 命名空间管理。但单个 PSP 在 BFCM 期间宕机是灾难性的营收事件。值得构建多大的冗余？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Single PSP</span><span class="zh">方案 A · 单一 PSP</span></div>
+          <p class="en">One PSP adapter, one contract, one idempotency key namespace. The Payment Service calls Shopify Payments (or Stripe) exclusively.</p>
+          <p class="zh">一个 PSP 适配器、一份合同、一个 idempotency key 命名空间。Payment Service 专门调用 Shopify Payments（或 Stripe）。</p>
+          <p class="en"><strong>+</strong> Simple integration, simple operations, no cross-PSP idempotency collision risk, single settlement report, lower engineering headcount to maintain.</p>
+          <p class="zh"><strong>+</strong> 集成简单、运维简单、无跨 PSP 幂等碰撞风险、单份结算报告、维护所需工程人力更少。</p>
+          <p class="en"><strong>−</strong> Full PSP outage kills checkout completely — during BFCM, even 5 minutes of downtime for a large merchant can mean millions in lost revenue; no leverage in contract negotiations; PSP rate changes have no alternative.</p>
+          <p class="zh"><strong>−</strong> PSP 完全宕机会彻底中断结账——在 BFCM 期间，对大型商家而言即使 5 分钟停机也意味着数百万的营收损失；合同谈判中没有筹码；PSP 费率变化没有替代选项。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Multi-PSP with circuit breaker</span><span class="zh">方案 B · 多 PSP + 断路器</span></div>
+          <p class="en">A primary PSP (Shopify Payments) backed by a secondary (PayPal, Adyen). A circuit breaker per PSP; when the primary circuit opens, route new checkouts to the secondary.</p>
+          <p class="zh">主 PSP（Shopify Payments）+ 备用 PSP（PayPal、Adyen）。每个 PSP 独立断路器；当主 PSP 断路打开时，将新的结账请求路由到备用 PSP。</p>
+          <p class="en"><strong>+</strong> Checkout remains available during a primary PSP outage; negotiating leverage; A/B routing for cost optimization; geographic routing for compliance (e.g. EU checkout → Stripe EU endpoint).</p>
+          <p class="zh"><strong>+</strong> 主 PSP 宕机期间结账仍可用；具备谈判筹码；可进行成本优化的 A/B 路由；合规地理路由（如 EU 结账 → Stripe EU 端点）。</p>
+          <p class="en"><strong>−</strong> Every PSP requires its own adapter, its own idempotency key prefix, its own settlement reconciliation lane, and its own webhook receiver config; routing logic adds a latency decision per checkout; two PSP contracts to negotiate and audit.</p>
+          <p class="zh"><strong>−</strong> 每个 PSP 都需要独立的适配器、独立的 idempotency key 前缀、独立的结算对账通道和独立的 webhook receiver 配置；路由逻辑为每次结账增加了决策延迟；需要谈判和审计两份 PSP 合同。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Multi-PSP for any platform serving high-revenue merchants.</strong> The revenue cost of a PSP outage on a peak shopping day easily justifies the engineering investment. The circuit breaker is the key component: it gates the failover so routing overhead is zero on the happy path, and the switch is automatic. Start with single PSP for small merchants or MVP; add the secondary when checkout revenue justifies the extra integration complexity.</p>
+        <p class="zh"><strong>服务高营收商家的任何平台都应使用多 PSP。</strong>高峰购物日 PSP 宕机的营收损失轻易证明了工程投入的价值。断路器是关键组件：它控制故障转移，使正常路径的路由开销为零，且切换是自动的。从单一 PSP 开始用于小型商家或 MVP；当结账营收证明额外集成复杂度有价值时，再接入备用 PSP。</p>
+      </div>
+
+      <h3><span class="en">⑥ Event delivery semantics — at-least-once vs exactly-once</span><span class="zh">⑥ 事件投递语义——至少一次 vs 精确一次</span></h3>
+      <p class="en"><strong>The tension:</strong> the outbox relay guarantees every committed order emits an event, but it can emit it more than once (if the relay crashes after publishing but before marking the row published). Exactly-once Kafka transactions avoid duplicates but add complexity. Which guarantee is right for money events?</p>
+      <p class="zh"><strong>矛盾点：</strong>outbox 中继保证每个已提交的订单都会发出一个事件，但它可能不止一次发出（如果中继在发布后、标记行已发布前崩溃）。精确一次 Kafka 事务避免重复但增加了复杂性。对资金事件而言，哪种保证是正确的？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · At-least-once via outbox</span><span class="zh">方案 A · outbox 实现的至少一次</span></div>
+          <p class="en">The relay publishes the outbox row to Kafka, then marks it published. If the relay crashes between those two steps, it re-publishes on restart — consumers may see the same event twice.</p>
+          <p class="zh">中继将 outbox 行发布到 Kafka，然后将其标记为已发布。如果中继在这两步之间崩溃，重启后会重新发布——消费者可能看到同一事件两次。</p>
+          <p class="en"><strong>+</strong> Simple, broadly understood, works with any Kafka client version; no transactional producer overhead; the outbox itself is the atomicity guarantee — the event will always eventually be delivered.</p>
+          <p class="zh"><strong>+</strong> 简单、广泛理解、适用于任何 Kafka 客户端版本；无事务性生产者开销；outbox 本身是原子性保证——事件始终最终会被投递。</p>
+          <p class="en"><strong>−</strong> Every consumer must handle duplicates: fulfillment, notifications, analytics all need a deduplication key check before acting — adding defensive code to every consumer.</p>
+          <p class="zh"><strong>−</strong> 每个消费者都必须处理重复：履单、通知、数据分析在操作前都需要去重键检查——给每个消费者增加防御性代码。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Exactly-once via Kafka transactions</span><span class="zh">方案 B · Kafka 事务实现的精确一次</span></div>
+          <p class="en">Use Kafka's transactional producer API: the relay wraps publish + offset-commit in one atomic transaction. Combined with <code>isolation.level=read_committed</code> on consumers, each message is processed exactly once end-to-end.</p>
+          <p class="zh">使用 Kafka 的事务性生产者 API：中继将发布 + offset 提交包装在一个原子事务中。结合消费者端的 <code>isolation.level=read_committed</code>，每条消息端到端恰好处理一次。</p>
+          <p class="en"><strong>+</strong> Consumers need no deduplication logic; event-driven pipelines (fulfillment, accounting) are simpler and safer — no "did we already process this?" logic.</p>
+          <p class="zh"><strong>+</strong> 消费者无需去重逻辑；事件驱动的流水线（履单、财务）更简单更安全——无需"我们已经处理过这个了吗？"的逻辑。</p>
+          <p class="en"><strong>−</strong> Transactional producers require Kafka 0.11+, specific broker config, and exact client library support; transactions add ~10 ms latency per batch; fewer Kafka client languages support the full transactional API; much harder to reason about when debugging.</p>
+          <p class="zh"><strong>−</strong> 事务性生产者需要 Kafka 0.11+、特定的 broker 配置以及精确的客户端库支持；事务每批增加约 10 ms 延迟；支持完整事务 API 的 Kafka 客户端语言较少；调试时更难推断。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>At-least-once + idempotent consumers.</strong> The industry consensus for payment systems is to design every consumer to be idempotent (check a deduplication key — <code>orderId</code>, <code>psp_ref</code> — before acting) and accept at-least-once delivery. This approach is simpler, more portable across Kafka versions, and easier to test. Exactly-once is theoretically cleaner but imposes broker and client constraints that create operational fragility; in practice, Kafka transactions have enough edge cases that most teams at scale prefer defensive consumers.</p>
+        <p class="zh"><strong>至少一次 + 幂等消费者。</strong>支付系统的行业共识是将每个消费者设计为幂等（在操作前检查去重键——<code>orderId</code>、<code>psp_ref</code>），并接受至少一次投递。这种方法更简单、跨 Kafka 版本更可移植且更易测试。精确一次理论上更整洁，但对 broker 和客户端施加了约束，造成运维脆弱性；在实践中，Kafka 事务有足够多的边缘情况，以至于大多数大规模团队更偏好防御性消费者。</p>
+      </div>
+
     </section>
 
     <!-- 8 FOLLOW-UPS -->

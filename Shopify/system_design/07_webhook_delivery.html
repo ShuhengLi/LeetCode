@@ -886,6 +886,52 @@ header:  X-Shopify-Hmac-SHA256: &lt;signature&gt;</code></pre>
         increasing their subscription tier or batching events.</span>
         <span class="zh">将消费者 lag（Kafka）、per-endpoint 队列深度和投递延迟 P99 作为一等指标暴露出来。如果某店铺的投递因自身事件量持续延迟，主动告知商家并考虑提升其订阅等级或对事件进行批量合并。</span>
       </div>
+
+      <h3>⑦ <span class="en">The delivery state machine &amp; DLQ replay</span><span class="zh">投递状态机与 DLQ 重放</span></h3>
+      <p class="en">Every delivery record is a small state machine. Getting the transitions right is what makes at-least-once delivery safe without causing runaway retry storms or permanent data loss. There are three interleaved state machines at work: the <strong>per-delivery lifecycle</strong>, the <strong>per-endpoint circuit breaker</strong>, and the <strong>merchant-initiated replay flow</strong>. Each must be understood independently and then composed.</p>
+      <p class="zh">每条投递记录都是一个小型状态机。把状态转换做对，正是在不引发失控重试风暴或永久数据丢失的前提下安全实现 at-least-once 投递的关键。这里有三个交织的状态机：<strong>单条投递的生命周期</strong>、<strong>per-endpoint 熔断器</strong>，以及<strong>商家发起的重放流程</strong>。每个都需要独立理解，再组合使用。</p>
+
+      <p class="en"><strong>Per-delivery state machine:</strong> a delivery starts <code>PENDING</code>. The worker picks it up (<code>IN_FLIGHT</code>) and POSTs to the subscriber. A 2xx response transitions it to <code>DELIVERED</code> — terminal. Any non-2xx or connection error returns it to a scheduled retry (<code>PENDING</code> with an updated <code>next_retry_at</code>), incrementing the attempt counter. After the maximum attempt count is exhausted the delivery moves to <code>DLQ</code> — not deleted, but parked for merchant inspection and replay. Note: a 4xx response (subscriber intentionally rejected the payload) is <em>not retried</em> — it is immediately <code>DLQ</code>'d with a <code>CLIENT_REJECTION</code> reason, since retrying a payload the subscriber has already rejected is wasteful and potentially harmful.</p>
+      <p class="zh"><strong>单条投递状态机：</strong>投递以 <code>PENDING</code> 状态开始。Worker 拾取后变为 <code>IN_FLIGHT</code>，并向订阅者发起 POST。收到 2xx 响应则转为 <code>DELIVERED</code>——终态。非 2xx 或连接错误则返回到定时重试状态（<code>PENDING</code> 并更新 <code>next_retry_at</code>），同时递增重试计数。重试次数耗尽后，投递转为 <code>DLQ</code>——不是删除，而是停放供商家检查和重放。注意：4xx 响应（订阅者有意拒绝 payload）<em>不触发重试</em>——立即以 <code>CLIENT_REJECTION</code> 原因进入 <code>DLQ</code>，因为对订阅者已明确拒绝的 payload 重试既浪费又可能有害。</p>
+
+      <p class="en"><strong>Per-endpoint circuit breaker:</strong> the circuit breaker runs orthogonally to individual delivery state. It tracks consecutive failure counts across all deliveries to an endpoint. After N consecutive failures (<code>CLOSED → OPEN</code>), the circuit opens: delivery workers short-circuit without making an HTTP connection, preserving worker-thread capacity for healthy endpoints. This is the mechanism that prevents one dead subscriber from causing head-of-line blocking. Deliveries during the open window are still queued normally — they are not dropped — they just aren't dispatched until the circuit probes. After a cool-down interval the circuit enters <code>HALF_OPEN</code>: a single probe request is sent. A 2xx closes the circuit (<code>HALF_OPEN → CLOSED</code>) and the worker begins draining the queue at a rate-limited pace. A failure re-opens it (<code>HALF_OPEN → OPEN</code>) and the cool-down resets.</p>
+      <p class="zh"><strong>Per-endpoint 熔断器：</strong>熔断器与单条投递状态正交运行。它跟踪对一个端点所有投递的连续失败次数。连续失败 N 次后（<code>CLOSED → OPEN</code>），熔断器断开：投递 Worker 短路，不发起 HTTP 连接，为健康端点保留 Worker 线程容量。这正是防止一个宕机订阅者造成队头阻塞的机制。断路期间投递仍正常入队——不是丢弃——只是不发出，直到熔断器探测。冷却间隔后熔断器进入 <code>HALF_OPEN</code>：发送一次探测请求。收到 2xx 则关闭熔断（<code>HALF_OPEN → CLOSED</code>），Worker 开始以限速节奏消费队列。失败则重新断开（<code>HALF_OPEN → OPEN</code>），冷却计时重置。</p>
+
+      <p class="en"><strong>Merchant-initiated replay:</strong> merchants can re-enqueue any subset of deliveries — including DLQ entries — via the replay API. The replay flow queries the <strong>durable event log</strong> (the append-only <code>event</code> table) by topic and time range, then creates new <code>delivery</code> rows for each matching event against the current active subscriptions. Critically, new <code>delivery.id</code> values are generated — the subscriber receives a fresh <code>X-Shopify-Webhook-Id</code>. Idempotent subscribers detect that they have already processed the underlying <code>event.idempotency_key</code> and skip re-processing. Non-idempotent subscribers will double-process — which is why the contract always requires subscriber-side idempotency. The replay enqueue rate is capped to avoid thundering-herd on a recently recovered endpoint.</p>
+      <p class="zh"><strong>商家发起的重放：</strong>商家可通过重放 API 将任意子集的投递——包括 DLQ 条目——重新入队。重放流程通过主题和时间范围查询<strong>持久化事件日志</strong>（仅追加的 <code>event</code> 表），然后为匹配事件针对当前活跃订阅创建新的 <code>delivery</code> 行。关键在于：会生成新的 <code>delivery.id</code>——订阅者收到新的 <code>X-Shopify-Webhook-Id</code>。幂等订阅者检测到已处理过底层 <code>event.idempotency_key</code> 后跳过重处理。非幂等订阅者则会重复处理——这正是契约始终要求订阅者侧幂等性的原因。重放入队速率受上限约束，避免对刚恢复的端点造成惊群效应。</p>
+
+      <pre><code><span class="c">-- Per-delivery state machine</span>
+PENDING ──worker picks up──▶ IN_FLIGHT ──2xx──▶ DELIVERED  <span class="c">(terminal)</span>
+                                 │
+                                 ├── 5xx / timeout ──▶ PENDING  <span class="c">(next_retry_at = now + backoff_i)</span>
+                                 │                         │
+                                 │         attempts &gt;= max ▼
+                                 │                       DLQ  <span class="c">(parked; merchant can replay)</span>
+                                 └── 4xx ──────────────▶ DLQ  <span class="c">(CLIENT_REJECTION; no retry)</span>
+
+<span class="c">-- Per-endpoint circuit breaker</span>
+CLOSED ──N consecutive failures──▶ OPEN ──cool-down elapsed──▶ HALF_OPEN
+  ▲                                                                  │
+  └── probe 2xx (rate-limited drain begins) ◀────────────── probe ──┤
+                                                                     └── probe failure ──▶ OPEN
+
+<span class="c">-- Backoff formula for PENDING → PENDING retry scheduling</span>
+<span class="c">-- base=60s, cap=86400s (24 hr), jitter_cap=0.2 × computed_delay</span>
+delay_i = <span class="k">min</span>(cap, base × <span class="n">2</span>^attempt) + <span class="k">rand</span>(<span class="n">0</span>, jitter_cap)
+next_retry_at = now() + delay_i
+
+<span class="c">-- Merchant replay: re-enqueue from durable event log</span>
+<span class="k">SELECT</span> e.* <span class="k">FROM</span> event e
+<span class="k">WHERE</span> e.topic = <span class="s">:topic</span>
+  <span class="k">AND</span> e.created_at BETWEEN <span class="s">:start</span> <span class="k">AND</span> <span class="s">:end</span>
+<span class="c">-- For each result × active subscriptions → INSERT new delivery rows</span>
+<span class="c">-- subscriber deduplicates via event.idempotency_key, not delivery.id</span></code></pre>
+
+      <div class="callout callout--warn">
+        <span class="ct"><span class="en">At-least-once means subscribers MUST be idempotent</span><span class="zh">At-least-once 意味着订阅者必须实现幂等性</span></span>
+        <p class="en">Every path through this state machine — retries on transient errors, circuit breaker probes, and especially merchant-initiated replay — can deliver the same event more than once. This is by design: Shopify's contract is <em>at least once</em>, not exactly once. Subscribers that process a webhook without checking <code>X-Shopify-Webhook-Id</code> (or the underlying <code>event.idempotency_key</code> on replay) will double-charge customers, double-fulfill orders, or corrupt ledgers. The practical implementation: store the delivery ID in a seen-IDs table (Redis sorted-set with a TTL, or a DB unique index on <code>processed_webhook_id</code>) and skip processing if the ID already exists. This check must be atomic with the business action — ideally within the same database transaction — to avoid a race between the check and the write.</p>
+        <p class="zh">通过这个状态机的每条路径——瞬时错误重试、熔断器探测，尤其是商家发起的重放——都可能多次投递同一个事件。这是有意为之：Shopify 的契约是<em>至少一次</em>，而非精确一次。处理 Webhook 时不检查 <code>X-Shopify-Webhook-Id</code>（或重放时的底层 <code>event.idempotency_key</code>）的订阅者将会对客户重复扣款、重复履单或损坏账本。实际实现方案：将投递 ID 存入已处理 ID 表（带 TTL 的 Redis sorted-set，或数据库中 <code>processed_webhook_id</code> 的唯一索引），若 ID 已存在则跳过处理。这个检查必须与业务操作原子执行——理想情况下在同一数据库事务内——以避免检查与写入之间的竞态条件。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -932,6 +978,183 @@ header:  X-Shopify-Hmac-SHA256: &lt;signature&gt;</code></pre>
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Delivery guarantee — at-least-once vs. exactly-once</span><span class="zh">① 投递保证——at-least-once vs. exactly-once</span></h3>
+      <p class="en"><strong>The tension:</strong> subscribers want zero duplicates, but guaranteeing exactly-once over an HTTP boundary you don't own requires the subscriber to cooperate in a distributed transaction — something Shopify cannot mandate.</p>
+      <p class="zh"><strong>矛盾点：</strong>订阅者希望零重复，但在你无法掌控的 HTTP 边界上保证精确一次，需要订阅者参与分布式事务——这是 Shopify 无法强制要求的。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · At-least-once</span><span class="zh">方案 A · At-least-once</span></div>
+          <p class="en">Shopify retries until it receives a 2xx; each retry carries the same <code>X-Shopify-Webhook-Id</code>. Subscribers are responsible for checking this ID against a seen-set before acting.</p>
+          <p class="zh">Shopify 重试直到收到 2xx；每次重试携带相同的 <code>X-Shopify-Webhook-Id</code>。订阅者负责在处理前核对已处理 ID 集合。</p>
+          <p class="en"><strong>+</strong> No cross-boundary distributed transaction required; scales to arbitrary third-party infrastructure. Simple retry loop on our side. Industry standard (Stripe, GitHub, PagerDuty all use it).</p>
+          <p class="zh"><strong>+</strong> 不需要跨边界分布式事务；可扩展到任意第三方基础设施。我方重试逻辑简单。行业标准（Stripe、GitHub、PagerDuty 均采用此方案）。</p>
+          <p class="en"><strong>−</strong> Duplicates are possible — a retry after a network partition where the subscriber already processed the event. Subscriber must implement idempotency logic, which increases app developer burden.</p>
+          <p class="zh"><strong>−</strong> 重复投递是可能的——在订阅者已处理事件后发生网络分区时仍会重试。订阅者必须实现幂等逻辑，增加了应用开发者的负担。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Exactly-once</span><span class="zh">方案 B · Exactly-once</span></div>
+          <p class="en">Requires a two-phase protocol spanning both sides of the HTTP call: Shopify writes to a transactional outbox, subscriber writes an idempotency key atomically with its business logic, and both sides participate in acknowledgment tracking.</p>
+          <p class="zh">需要横跨 HTTP 调用两端的两阶段协议：Shopify 写入事务性 outbox，订阅者将幂等键与业务逻辑原子写入，双方共同参与确认跟踪。</p>
+          <p class="en"><strong>+</strong> Zero duplicate processing — every event is acted on exactly once, which simplifies subscriber logic for non-idempotent operations (e.g. financial ledger entries).</p>
+          <p class="zh"><strong>+</strong> 零重复处理——每个事件恰好被处理一次，简化了非幂等操作的订阅者逻辑（如财务账本条目）。</p>
+          <p class="en"><strong>−</strong> Impossible to enforce without subscriber cooperation and compatible infrastructure. Even with an idempotent HTTP method, a 2xx ACK can be lost after the subscriber already processed — no way to distinguish "processed and ACK lost" from "not yet processed" without a shared transaction log. Complexity explodes; onboarding any third-party app becomes a protocol negotiation.</p>
+          <p class="zh"><strong>−</strong> 没有订阅者配合和兼容基础设施就无法强制实施。即使使用幂等的 HTTP 方法，2xx ACK 也可能在订阅者处理后丢失——不借助共享事务日志无法区分"已处理但 ACK 丢失"与"尚未处理"。复杂度爆炸；引入任何第三方应用都变成协议谈判。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Always at-least-once for webhooks over HTTP.</strong> Document the contract explicitly; provide <code>X-Shopify-Webhook-Id</code> and encourage subscribers to store it in a seen-IDs table. For internal service-to-service communication within Shopify's own infrastructure (where you control both sides), exactly-once via a transactional outbox + idempotency key in the same DB transaction becomes feasible — but that is a different problem from public webhooks.</p>
+        <p class="zh"><strong>HTTP Webhook 始终使用 at-least-once。</strong>明确记录契约；提供 <code>X-Shopify-Webhook-Id</code> 并鼓励订阅者将其存储在已处理 ID 表中。对于 Shopify 内部的服务间通信（双方均受你控制），通过同一 DB 事务中的事务性 outbox + 幂等键实现精确一次是可行的——但那是与公共 Webhook 不同的问题。</p>
+      </div>
+
+      <h3><span class="en">② Queue topology — per-endpoint queues vs. shared queue</span><span class="zh">② 队列拓扑——per-endpoint 队列 vs. 共享队列</span></h3>
+      <p class="en"><strong>The tension:</strong> operational simplicity of one queue vs. isolation correctness of one queue per subscriber. A single dead endpoint behind a shared queue can silently poison deliveries to every healthy subscriber.</p>
+      <p class="zh"><strong>矛盾点：</strong>单队列的运维简洁性 vs. 按订阅者独立队列的隔离正确性。共享队列中一个宕机端点会静默地毒害所有健康订阅者的投递。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Per-endpoint queues</span><span class="zh">方案 A · Per-endpoint 队列</span></div>
+          <p class="en">Each subscription gets its own logical queue. Delivery workers consume independently; a backlog in one queue has zero effect on any other queue's drain rate.</p>
+          <p class="zh">每个订阅拥有自己的逻辑队列。投递 Worker 独立消费；一个队列的积压对其他队列的消费速率零影响。</p>
+          <p class="en"><strong>+</strong> Perfect isolation — head-of-line blocking is structurally impossible across endpoints. Circuit breaker state, rate limiting, and backlog are all endpoint-scoped. Autoscaling is proportional to real demand, not worst-case dead-endpoint scenarios.</p>
+          <p class="zh"><strong>+</strong> 完全隔离——队头阻塞在结构上不可能跨端点发生。熔断器状态、速率限制和积压均以端点为粒度。自动扩容与实际需求成比例，而非按宕机端点的最坏情况配置。</p>
+          <p class="en"><strong>−</strong> Queue proliferation: a platform with millions of subscriptions needs careful queue-management infrastructure (lazy-create, prune empty queues, metadata store). Monitoring fan-out is more complex — need to aggregate metrics across all queues.</p>
+          <p class="zh"><strong>−</strong> 队列激增：拥有数百万订阅的平台需要精心的队列管理基础设施（惰性创建、清理空队列、元数据存储）。监控扇出更复杂——需要跨所有队列聚合指标。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Shared queue</span><span class="zh">方案 B · 共享队列</span></div>
+          <p class="en">All delivery tasks go into one (or a few) global queues consumed by a shared worker pool.</p>
+          <p class="zh">所有投递任务进入一个（或少数几个）全局队列，由共享 Worker 池消费。</p>
+          <p class="en"><strong>+</strong> Operationally simple — one queue to monitor, one worker pool to scale, trivial to reason about total throughput. Easy to get started.</p>
+          <p class="zh"><strong>+</strong> 运维简单——只需监控一个队列，扩容一个 Worker 池，总吞吐量易于推理。快速上手。</p>
+          <p class="en"><strong>−</strong> Head-of-line blocking is catastrophic at scale. A subscriber with a 30 s timeout occupies a worker thread for 30 s; during a BFCM event storm, a handful of dead endpoints can stall deliveries to thousands of healthy apps. No isolation guarantee — SLA for healthy subscribers degrades with the worst subscriber on the platform.</p>
+          <p class="zh"><strong>−</strong> 队头阻塞在规模下是灾难性的。一个 30 秒超时的订阅者占用 Worker 线程 30 秒；在黑五事件风暴期间，少数宕机端点就能阻塞数千个健康应用的投递。无隔离保证——健康订阅者的 SLA 随平台上最差订阅者的状态而降级。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Per-endpoint queues are non-negotiable</strong> at Shopify's app ecosystem scale. The isolation requirement is a correctness property, not a performance optimization. A shared queue is only appropriate for very low-volume, internal-only webhook systems where all subscribers are trusted and well-behaved.</p>
+        <p class="zh"><strong>在 Shopify 应用生态的规模下，per-endpoint 队列不可妥协。</strong>隔离需求是正确性属性，而非性能优化。共享队列仅适用于极低流量、仅供内部使用的 Webhook 系统，且所有订阅者可信且行为良好。</p>
+      </div>
+
+      <h3><span class="en">③ Fan-out style — synchronous vs. asynchronous</span><span class="zh">③ 扇出方式——同步 vs. 异步</span></h3>
+      <p class="en"><strong>The tension:</strong> the simplest fan-out happens inline — when an order is created, immediately POST to all subscribers. But this couples the order pipeline's latency directly to every subscriber's response time.</p>
+      <p class="zh"><strong>矛盾点：</strong>最简单的扇出是内联完成——订单创建时立即 POST 给所有订阅者。但这将订单管道的延迟与每个订阅者的响应时间直接耦合。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Synchronous fan-out</span><span class="zh">方案 A · 同步扇出</span></div>
+          <p class="en">Fan-out happens inline during event handling — the order service calls all subscriber endpoints before returning a response or committing the order.</p>
+          <p class="zh">扇出在事件处理时内联发生——订单服务在返回响应或提交订单之前调用所有订阅者端点。</p>
+          <p class="en"><strong>+</strong> Simple to reason about; no intermediate queue to manage; delivery confirmation is immediate within the same transaction boundary.</p>
+          <p class="zh"><strong>+</strong> 逻辑简单易懂；无中间队列需要管理；在同一事务边界内立即确认投递。</p>
+          <p class="en"><strong>−</strong> Any slow or failing subscriber directly increases order latency. At 20 subscribers × 500 ms each, an order takes 10 s just for webhooks. Fan-out amplification (one order event → 5,000 POSTs during BFCM) makes checkout unusable. Entire order pipeline fails if a subscriber is unreachable.</p>
+          <p class="zh"><strong>−</strong> 任何慢速或失败的订阅者都会直接增加订单延迟。20 个订阅者 × 每个 500 毫秒，一笔订单光 Webhook 就要 10 秒。扇出放大效应（一个订单事件 → 黑五期间 5000 次 POST）使结账不可用。若有订阅者不可达，整个订单管道就会失败。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Async fan-out via Kafka</span><span class="zh">方案 B · 经由 Kafka 的异步扇出</span></div>
+          <p class="en">Domain services emit events to Kafka and immediately return. A dedicated Fan-out Service consumes from Kafka and enqueues delivery tasks at its own pace.</p>
+          <p class="zh">领域服务向 Kafka 发出事件后立即返回。专属 Fan-out Service 从 Kafka 消费，并按自身节奏将投递任务入队。</p>
+          <p class="en"><strong>+</strong> Order pipeline latency is completely decoupled from webhook delivery. Kafka buffer absorbs any spike. Fan-out consumer can scale independently. Failed deliveries don't affect the order success path at all.</p>
+          <p class="zh"><strong>+</strong> 订单管道延迟与 Webhook 投递完全解耦。Kafka 缓冲吸收任何尖峰。Fan-out 消费者可独立扩容。投递失败完全不影响订单成功路径。</p>
+          <p class="en"><strong>−</strong> Adds operational complexity (Kafka cluster, consumer lag monitoring, offset management). Delivery is no longer synchronous with the originating transaction — a slight delay (seconds to minutes under load) is expected and must be communicated to app developers.</p>
+          <p class="zh"><strong>−</strong> 增加运维复杂度（Kafka 集群、消费者 lag 监控、offset 管理）。投递不再与来源事务同步——在负载下预期会有轻微延迟（秒到分钟级），必须告知应用开发者。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Async via Kafka is mandatory</strong> for any production webhook system at significant scale. The order pipeline must not wait for webhook delivery. Synchronous fan-out is only viable for very low-volume internal notifications where all subscribers are on the same network with sub-millisecond RTT.</p>
+        <p class="zh"><strong>在任何有一定规模的生产 Webhook 系统中，经由 Kafka 的异步扇出是必须的。</strong>订单管道绝不能等待 Webhook 投递。同步扇出仅适用于极低流量、所有订阅者在同一网络且 RTT 亚毫秒级的内部通知场景。</p>
+      </div>
+
+      <h3><span class="en">④ Ordering vs. throughput — serial per-subscription vs. unordered parallel</span><span class="zh">④ 顺序性 vs. 吞吐量——按订阅串行 vs. 无序并行</span></h3>
+      <p class="en"><strong>The tension:</strong> guaranteeing that <code>orders/create</code> arrives before <code>orders/updated</code> at a subscriber requires serial per-subscription delivery, which caps throughput at one-in-flight-at-a-time per subscriber. Most subscribers don't actually need this.</p>
+      <p class="zh"><strong>矛盾点：</strong>保证 <code>orders/create</code> 在 <code>orders/updated</code> 之前到达订阅者，需要按订阅串行投递，这将每个订阅者的吞吐量上限卡在同时只有一条在途。而大多数订阅者实际上并不需要这一保证。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Per-subscription serial delivery</span><span class="zh">方案 A · 按订阅串行投递</span></div>
+          <p class="en">Each subscription's delivery worker processes one task at a time in Kafka-offset order. The next delivery is not dispatched until the current one ACKs or fails.</p>
+          <p class="zh">每个订阅的投递 Worker 按 Kafka offset 顺序每次处理一个任务。下一条投递在当前条确认或失败之前不会发出。</p>
+          <p class="en"><strong>+</strong> Strict event ordering at the subscriber — <code>order.created</code> is guaranteed to land before <code>order.updated</code>. Safe for order-sensitive operations like inventory ledgers or state machines.</p>
+          <p class="zh"><strong>+</strong> 订阅者端严格事件有序——保证 <code>order.created</code> 在 <code>order.updated</code> 之前到达。对顺序敏感的操作（如库存账本或状态机）是安全的。</p>
+          <p class="en"><strong>−</strong> Throughput ceiling = 1 / (delivery latency per event). A subscriber averaging 200 ms response time tops out at 5 events/sec regardless of how many workers you throw at it. One slow delivery head-of-line-blocks the entire event stream for that subscription.</p>
+          <p class="zh"><strong>−</strong> 吞吐上限 = 1 / 每事件投递延迟。平均 200 毫秒响应的订阅者吞吐上限为 5 事件/秒，无论投入多少 Worker。一条慢投递会队头阻塞该订阅的整个事件流。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Unordered parallel delivery</span><span class="zh">方案 B · 无序并行投递</span></div>
+          <p class="en">Multiple workers process the same subscription's queue concurrently; events may arrive at the subscriber out of emission order.</p>
+          <p class="zh">多个 Worker 并发处理同一订阅的队列；事件可能以非发出顺序到达订阅者。</p>
+          <p class="en"><strong>+</strong> Maximum throughput — scales linearly with worker count. No head-of-line blocking within the subscription. Jitter from network variability doesn't accumulate as backlog.</p>
+          <p class="zh"><strong>+</strong> 最大吞吐量——随 Worker 数量线性扩展。订阅内无队头阻塞。网络抖动不会累积为积压。</p>
+          <p class="en"><strong>−</strong> Events may arrive out of order. Subscribers must handle an <code>order.updated</code> arriving before <code>order.created</code> — usually solved by including a full snapshot in every payload (so ordering doesn't matter) rather than delta events. Apps that require ordering (rare) cannot use this mode safely.</p>
+          <p class="zh"><strong>−</strong> 事件可能乱序到达。订阅者必须处理 <code>order.updated</code> 先于 <code>order.created</code> 到达的情况——通常通过在每次 payload 中包含完整快照（而非增量事件）来解决，使顺序无关紧要。需要有序的应用（少数）无法安全使用此模式。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Default to unordered parallel</strong> — most webhook payloads carry full resource snapshots, making ordering irrelevant. Use Kafka partition-by-<code>shop_id</code> for coarse per-shop ordering at the bus level (nearly free). Enable per-subscription serial delivery only when the app contract explicitly requires strict event ordering and the throughput cost is acceptable.</p>
+        <p class="zh"><strong>默认使用无序并行</strong>——大多数 Webhook payload 携带完整资源快照，使顺序无关紧要。在总线层使用 Kafka 按 <code>shop_id</code> 分区实现粗粒度按店有序（几乎免费）。仅在应用契约明确要求严格事件有序且可接受吞吐代价时，才启用按订阅串行投递。</p>
+      </div>
+
+      <h3><span class="en">⑤ Push vs. pull — webhooks vs. polling API / managed bus</span><span class="zh">⑤ 推送 vs. 拉取——Webhook vs. 轮询 API / 托管消息总线</span></h3>
+      <p class="en"><strong>The tension:</strong> push webhooks give low-latency, zero-polling delivery but require the subscriber to be publicly reachable. Pull lets the subscriber control consumption rate and works behind firewalls, but introduces polling overhead and higher latency.</p>
+      <p class="zh"><strong>矛盾点：</strong>推送 Webhook 实现低延迟、零轮询投递，但要求订阅者可被公开访问。拉取让订阅者控制消费速率，也可在防火墙后运行，但引入了轮询开销和更高延迟。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Push webhooks</span><span class="zh">方案 A · 推送 Webhook</span></div>
+          <p class="en">Shopify POSTs to the subscriber's registered URL as soon as the event is enqueued for delivery.</p>
+          <p class="zh">一旦事件入队投递，Shopify 立即 POST 到订阅者的已注册 URL。</p>
+          <p class="en"><strong>+</strong> Sub-second delivery latency. No wasted polling. No subscriber-side polling infrastructure. The ecosystem standard — all major Shopify app partners expect it.</p>
+          <p class="zh"><strong>+</strong> 亚秒级投递延迟。无浪费性轮询。订阅者侧无需轮询基础设施。生态标准——所有主要 Shopify 应用合作伙伴都期待此方式。</p>
+          <p class="en"><strong>−</strong> Subscriber must expose a public HTTPS endpoint (impossible behind firewalls / NAT without a tunnel). Shopify carries the retry/backoff complexity and must handle SSRF risk. Delivery rate is driven by Shopify, not the subscriber — a slow subscriber builds a queue on our side.</p>
+          <p class="zh"><strong>−</strong> 订阅者必须暴露公开 HTTPS 端点（在防火墙/NAT 后不借助隧道无法实现）。Shopify 承担重试/退避复杂度，且必须处理 SSRF 风险。投递速率由 Shopify 驱动，而非订阅者——慢速订阅者在我们这边积累队列。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Pull API / managed bus</span><span class="zh">方案 B · 拉取 API / 托管消息总线</span></div>
+          <p class="en">Events are retained in Shopify's event log; subscriber polls a <code>GET /events</code> API or subscribes to a managed bus (Amazon EventBridge, Google Pub/Sub) and pulls at its own rate.</p>
+          <p class="zh">事件保留在 Shopify 事件日志中；订阅者轮询 <code>GET /events</code> API，或订阅托管消息总线（Amazon EventBridge、Google Pub/Sub）并按自身速率拉取。</p>
+          <p class="en"><strong>+</strong> Subscriber controls consumption rate — no thundering-herd on resume. Works behind firewalls and VPNs. No public endpoint required — better security posture for enterprise apps.</p>
+          <p class="zh"><strong>+</strong> 订阅者控制消费速率——恢复时无惊群效应。可在防火墙和 VPN 后运行。不需要公开端点——对企业应用安全姿态更好。</p>
+          <p class="en"><strong>−</strong> Higher delivery latency (bound by poll interval, typically 30 s–5 min). Polling overhead wastes resources when events are infrequent. Shopify must retain events long enough for the subscriber to pull (storage cost). Operational complexity on the subscriber side increases.</p>
+          <p class="zh"><strong>−</strong> 投递延迟更高（受轮询间隔限制，通常 30 秒到 5 分钟）。事件稀少时轮询开销浪费资源。Shopify 必须保留足够长时间的事件供订阅者拉取（存储成本）。订阅者侧运维复杂度增加。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Push is the default</strong> for the vast majority of Shopify app developers. <strong>Offer pull as an opt-in</strong> for enterprise merchants and partners who operate behind VPNs or need guaranteed consumption-rate control (e.g. integration platforms that batch-process events). A hybrid — push for real-time, pull for bulk backfill / missed-event replay — is the right long-term architecture.</p>
+        <p class="zh"><strong>推送是绝大多数 Shopify 应用开发者的默认选项。</strong>为在 VPN 后运营或需要保证消费速率控制的企业商家和合作伙伴<strong>提供可选拉取模式</strong>（例如批量处理事件的集成平台）。混合模式——实时用推送，批量回填/漏发事件重放用拉取——是正确的长期架构。</p>
+      </div>
+
+      <h3><span class="en">⑥ Retry aggressiveness — exponential back-off + jitter vs. aggressive retries</span><span class="zh">⑥ 重试激进程度——指数退避+抖动 vs. 激进重试</span></h3>
+      <p class="en"><strong>The tension:</strong> fast retries minimize delivery delay after a transient failure, but when an endpoint comes back online after an outage, all its backed-up retries fire simultaneously — a thundering herd that can immediately re-knock the recovering subscriber offline.</p>
+      <p class="zh"><strong>矛盾点：</strong>快速重试可最小化瞬时失败后的投递延迟，但端点在中断后恢复上线时，所有积压的重试同时触发——这波惊群效应可能立即将正在恢复的订阅者再次打垮。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Aggressive retries</span><span class="zh">方案 A · 激进重试</span></div>
+          <p class="en">Short back-off delays (e.g. retry every 60 s for the first few attempts); large number of retries before DLQ; no rate limit on resume.</p>
+          <p class="zh">短退避延迟（如前几次重试每 60 秒一次）；进入 DLQ 前重试次数多；恢复时无速率限制。</p>
+          <p class="en"><strong>+</strong> Fast recovery from transient failures — a 2-minute outage results in at most ~2 min of delivery delay rather than hours.</p>
+          <p class="zh"><strong>+</strong> 瞬时故障恢复快——2 分钟中断最多导致约 2 分钟投递延迟，而非数小时。</p>
+          <p class="en"><strong>−</strong> Thundering herd on resume — a subscriber recovering from a 1-hour outage gets hit simultaneously by all queued retries. This can cascade: the overload causes more failures, which trigger more retries. Also amplifies load on Shopify's own retry infrastructure and Kafka consumer lag increases as queued tasks pile up.</p>
+          <p class="zh"><strong>−</strong> 恢复时惊群效应——从 1 小时中断恢复的订阅者同时收到所有排队重试。这可能产生级联：过载导致更多失败，触发更多重试。也会放大 Shopify 自身重试基础设施的负载，排队任务堆积导致 Kafka 消费者 lag 增大。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Conservative back-off + rate-limited resume</span><span class="zh">方案 B · 保守退避 + 限速恢复</span></div>
+          <p class="en">Exponential back-off with jitter (e.g. <code>min(cap, base × 2^attempt) + rand(0, 0.2 × delay)</code>); per-endpoint rate limiter on queue drain when circuit closes.</p>
+          <p class="zh">指数退避加抖动（如 <code>min(cap, base × 2^attempt) + rand(0, 0.2 × delay)</code>）；熔断关闭时对队列消费施加 per-endpoint 速率限制。</p>
+          <p class="en"><strong>+</strong> Jitter spreads retries across time — no synchronized storm. Rate-limited resume gives a recovering subscriber time to warm up. Exponential growth means a truly dead endpoint stops consuming retry capacity quickly.</p>
+          <p class="zh"><strong>+</strong> 抖动将重试分散到时间上——无同步风暴。限速恢复给正在恢复的订阅者预热时间。指数增长意味着真正宕机的端点会快速停止消耗重试容量。</p>
+          <p class="en"><strong>−</strong> Slower recovery for transient failures — a 2-minute outage may result in deliveries that are delayed up to 15–30 min (the 3rd or 4th retry slot). For time-sensitive operations this matters; the merchant may have already taken action based on stale data before the delivery arrives.</p>
+          <p class="zh"><strong>−</strong> 瞬时故障恢复更慢——2 分钟中断可能导致投递延迟长达 15–30 分钟（第 3 或第 4 次重试槽）。对于时间敏感的操作，这一点很重要；在投递到达之前，商家可能已基于过期数据采取了行动。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Exponential back-off + jitter + per-endpoint rate-limited resume is always the right answer</strong> for a multi-tenant webhook platform. The key tuning parameters are: base delay (60 s is industry-standard), jitter cap (20% of computed delay), and the per-endpoint drain rate after circuit close (e.g. 10 req/s initially, ramping up). Aggressive retries are only reasonable for low-volume, trusted internal systems where thundering-herd risk is negligible.</p>
+        <p class="zh"><strong>指数退避 + 抖动 + per-endpoint 限速恢复始终是多租户 Webhook 平台的正确答案。</strong>关键调参参数为：基础延迟（60 秒是行业标准）、抖动上限（计算延迟的 20%）、熔断关闭后 per-endpoint 消费速率（例如初始 10 req/s，逐步提升）。激进重试仅在低流量、受信任的内部系统中合理，那里惊群效应风险可以忽略不计。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

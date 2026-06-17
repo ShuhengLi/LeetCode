@@ -974,6 +974,40 @@ redis.call(<span class="s">'PEXPIRE'</span>, KEYS[1], <span class="n">3600000</s
         The conservative local-cap variant gives a good middle ground: availability is protected, and unlimited abuse is prevented.
         Always log the fallback state so the operations team has visibility.</span><span class="zh">限流器高可用的行业标准建议是<strong>失败开放</strong>——将服务可用性置于完美执行之上。Redis 宕机期间，主要业务风险是商户损失销售额，而非被过度服务。保守的本地限流兜底方案提供了良好的中间地带：可用性得到保护，无限制滥用得以防范。始终记录降级状态日志，以便运营团队保持可见性。</span>
       </div>
+
+      <h3><span class="en">⑥ Distributed-counter correctness — staying accurate across many gateway nodes and a Redis resharding</span><span class="zh">⑥ 分布式计数器正确性——在多网关节点和 Redis 重分片下保持精度</span></h3>
+      <p class="en">With ~100 gateway nodes, any of them can serve a given client's request. The rate-limit counter must therefore be <strong>shared</strong>, not per-node — otherwise each node tracks only the traffic it sees locally and the global limit is never enforced. Three sub-problems nest inside this: atomicity, sharding, and resharding.</p>
+      <p class="zh">约 100 个网关节点中的任意一个都可以处理某个客户端的请求。因此限流计数器必须是<strong>共享的</strong>，而非节点本地的——否则每个节点只追踪自己看到的流量，全局限额将永远无法执行。这里嵌套着三个子问题：原子性、分片，以及重分片。</p>
+
+      <p class="en"><strong>Atomicity via Lua — eliminating the TOCTOU race.</strong> A naive check-then-decrement in three separate Redis commands (GET → compute → SET) is broken: two nodes can read the same token count simultaneously, both decide the request is allowed, and both decrement — admitting 2× the intended traffic. This is a classic TOCTOU (time-of-check-time-of-use) race. The fix is to run the entire check-refill-decrement as a single Lua script, which Redis executes atomically with no interleaving possible:</p>
+      <p class="zh"><strong>通过 Lua 保证原子性——消除 TOCTOU 竞态。</strong>用三条独立 Redis 命令做"检查-扣减"（GET → 计算 → SET）从根本上是错误的：两个节点可以同时读取相同的令牌数，都判断请求允许，都执行扣减——放行了 2 倍预期流量。这是经典的 TOCTOU（检查时间-使用时间）竞态条件。解决方案是将整个"检查-补充-扣减"作为单个 Lua 脚本执行，Redis 将其原子地执行，不可能发生任何交错：</p>
+      <pre><code><span class="c">-- Atomic token-bucket check-refill-decrement (single round trip, no TOCTOU)</span>
+<span class="c">-- KEYS[1] = bucket key  ARGV[1] = now_ms  ARGV[2] = cost  ARGV[3] = capacity  ARGV[4] = refill_rate_per_ms</span>
+<span class="k">local</span> data     = redis.call(<span class="s">'HMGET'</span>, KEYS[<span class="n">1</span>], <span class="s">'tokens'</span>, <span class="s">'ts'</span>)
+<span class="k">local</span> tokens   = <span class="k">tonumber</span>(data[<span class="n">1</span>]) <span class="k">or</span> <span class="k">tonumber</span>(ARGV[<span class="n">3</span>])  <span class="c">-- default: full bucket</span>
+<span class="k">local</span> last_ts  = <span class="k">tonumber</span>(data[<span class="n">2</span>]) <span class="k">or</span> <span class="k">tonumber</span>(ARGV[<span class="n">1</span>])
+<span class="k">local</span> elapsed  = <span class="k">tonumber</span>(ARGV[<span class="n">1</span>]) - last_ts
+<span class="k">local</span> refilled = elapsed * <span class="k">tonumber</span>(ARGV[<span class="n">4</span>])
+tokens = <span class="k">math.min</span>(<span class="k">tonumber</span>(ARGV[<span class="n">3</span>]), tokens + refilled)  <span class="c">-- cap at capacity</span>
+<span class="k">if</span> tokens &lt; <span class="k">tonumber</span>(ARGV[<span class="n">2</span>]) <span class="k">then</span>
+  <span class="k">return</span> {<span class="n">0</span>, tokens}                                       <span class="c">-- denied</span>
+<span class="k">end</span>
+tokens = tokens - <span class="k">tonumber</span>(ARGV[<span class="n">2</span>])
+redis.call(<span class="s">'HMSET'</span>, KEYS[<span class="n">1</span>], <span class="s">'tokens'</span>, tokens, <span class="s">'ts'</span>, ARGV[<span class="n">1</span>])
+redis.call(<span class="s">'PEXPIRE'</span>, KEYS[<span class="n">1</span>], <span class="n">60000</span>)                    <span class="c">-- TTL = 60 s</span>
+<span class="k">return</span> {<span class="n">1</span>, tokens}                                         <span class="c">-- allowed, tokens remaining</span></code></pre>
+
+      <p class="en"><strong>Sharding by clientId — distributing hot keys.</strong> Redis Cluster shards keys by slot (CRC16 of the key name). If all of a client's bucket keys map to different slots on different nodes, a Lua script cannot atomically access them — Lua requires all keys to live on the same slot. The solution is a <strong>hash tag</strong>: use <code>bucket:{shopId}:{appId}</code> as the key so that the <code>{shopId}:{appId}</code> portion determines the slot. All keys for the same client land on the same Redis node, allowing atomic Lua execution. Sharding distributes load: a high-traffic merchant's hot key stays on its own shard and cannot saturate the limiter for other tenants.</p>
+      <p class="zh"><strong>按 clientId 分片——分散热键。</strong>Redis Cluster 按槽（键名的 CRC16）分片。如果某个客户端的所有桶键映射到不同节点的不同槽，Lua 脚本无法原子地访问它们——Lua 要求所有键位于同一个槽。解决方案是使用<strong>哈希标签</strong>：键名使用 <code>bucket:{shopId}:{appId}</code>，这样 <code>{shopId}:{appId}</code> 部分决定槽位。同一客户端的所有键落在同一个 Redis 节点，从而允许原子 Lua 执行。分片分散负载：高流量商户的热键留在自己的分片上，无法占满其他租户的限流容量。</p>
+
+      <p class="en"><strong>Resharding (slot migration) — handling MOVED and ASK.</strong> When a Redis Cluster adds or removes nodes, slots migrate between them. During migration a slot is transiently owned by both the source and target node; Redis returns <code>MOVED</code> (slot fully moved — retry target) or <code>ASK</code> (slot mid-migration — send ASKING then retry target). A bucket key accessed during migration receives one of these errors instead of a result. The safe strategy: catch <code>MOVED</code>/<code>ASK</code>, retry on the indicated node, and — for the brief window where retries are not yet settled — <strong>fail open with a conservative per-node local cap</strong>. This keeps the API available rather than returning 503 to all merchants while a slot migrates.</p>
+      <p class="zh"><strong>重分片（槽迁移）——处理 MOVED 和 ASK。</strong>Redis Cluster 添加或移除节点时，槽在节点间迁移。迁移期间，槽短暂地被源节点和目标节点同时持有；Redis 返回 <code>MOVED</code>（槽已完全迁移——重试目标节点）或 <code>ASK</code>（槽迁移中——先发 ASKING 再重试目标节点）。迁移期间访问桶键会收到这些错误而非正常结果。安全策略：捕获 <code>MOVED</code>/<code>ASK</code>，在指定节点重试，并在重试尚未稳定的短暂窗口内——<strong>以保守的节点本地限流兜底进行失败开放</strong>。这样可以在槽迁移期间保持 API 可用，而非向所有商户返回 503。</p>
+
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Centralized = accurate but a hot shard; local = fast but approximate</span><span class="zh">集中式 = 精确但存在热分片；本地 = 快速但近似</span></span>
+        <p class="en">The fundamental trade-off is permanent: <strong>centralized Redis buckets</strong> give near-perfect accuracy (all 100 nodes share one view) but the Redis round trip is on the hot path and the bucket key can become a hot shard under extreme traffic. <strong>Per-node local token buckets with async reconciliation</strong> are sub-millisecond with no network hop and naturally survive Redis outages — but they are approximate: a client can over-admit by up to node-count× before reconciliation catches up. For a security-sensitive rate limiter, centralized wins; for an availability-first limiter where approximate limiting is acceptable, local buckets are the right fallback — not the default.</p>
+        <p class="zh">这是一个永久性的根本权衡：<strong>集中式 Redis 桶</strong>精度接近完美（全部 100 个节点共享同一视图），但 Redis 往返处于热路径上，极端流量下桶键可能成为热分片。<strong>节点本地令牌桶 + 异步对账</strong>亚毫秒延迟、无网络跳转，天然能扛 Redis 宕机——但是近似的：对账追上之前，客户端最多可超额放行节点数倍。对于安全敏感的限流器，集中式胜出；对于可用性优先、近似限流可接受的限流器，本地桶是正确的<em>兜底</em>选项——而非默认选项。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -1020,6 +1054,183 @@ redis.call(<span class="s">'PEXPIRE'</span>, KEYS[1], <span class="n">3600000</s
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, what each actually does, their pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的工作方式、优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Algorithm accuracy vs cost — fixed window vs token bucket</span><span class="zh">① 算法精度 vs 开销——固定窗口 vs 令牌桶</span></h3>
+      <p class="en"><strong>The tension:</strong> a simpler counter is cheaper to store and compute, but a more sophisticated algorithm produces fairer, smoother limiting behavior. Which complexity budget is worth paying?</p>
+      <p class="zh"><strong>矛盾点：</strong>更简单的计数器存储和计算开销更低，但更复杂的算法能产生更公平、更平滑的限流效果。该支付哪个复杂度代价？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Fixed window counter</span><span class="zh">方案 A · 固定窗口计数器</span></div>
+          <p class="en">One Redis key per client per window (e.g. <code>rl:{shopId}:1680000060</code>). Each request does <code>INCR</code> + check; key expires at window end.</p>
+          <p class="zh">每个客户端每个窗口一个 Redis 键（如 <code>rl:{shopId}:1680000060</code>）。每次请求执行 <code>INCR</code> + 检查；键在窗口结束时过期。</p>
+          <p class="en"><strong>+</strong> Extremely cheap: one <code>INCR</code>, O(1) storage, dead simple to reason about.</p>
+          <p class="zh"><strong>+</strong> 极其廉价：一次 <code>INCR</code>，O(1) 存储，逻辑极其简单。</p>
+          <p class="en"><strong>−</strong> Boundary burst: a client can send the full limit in the last second of window N, then again in the first second of window N+1 — effectively 2× the intended rate at the seam. For an API that can cause real backend load, this is not a theoretical concern.</p>
+          <p class="zh"><strong>−</strong> 边界突发：客户端可在第 N 窗口最后一秒发送满额请求，再在第 N+1 窗口第一秒再次发送——在窗口边界处实际速率可达预期的 2 倍。对于可能造成真实后端负载的 API，这不是理论上的担忧。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Token bucket</span><span class="zh">方案 B · 令牌桶</span></div>
+          <p class="en">State = <code>{tokens, last_refill_ts}</code>. Each request recomputes tokens via elapsed time, deducts the request cost, and stores the new state — atomically in Lua.</p>
+          <p class="zh">状态 = <code>{tokens, last_refill_ts}</code>。每次请求通过经过时间重新计算令牌数，扣除请求成本，原子地（通过 Lua）存储新状态。</p>
+          <p class="en"><strong>+</strong> No boundary burst: tokens refill continuously, not in jumps. Supports variable request cost (critical for GraphQL). Absorbs legitimate bursts up to bucket capacity, then smooths to refill rate.</p>
+          <p class="zh"><strong>+</strong> 无边界突发：令牌连续补充，而非跳跃式。支持可变请求成本（GraphQL 的关键特性）。可在桶容量范围内吸收合理突发，之后平滑到补充速率。</p>
+          <p class="en"><strong>−</strong> Slightly more Redis state (two fields per key vs one); Lua script required for atomicity; reasoning about "current tokens" requires reading <code>last_refill_ts</code>.</p>
+          <p class="zh"><strong>−</strong> Redis 状态略多（每键两个字段 vs 一个）；原子性需要 Lua 脚本；计算"当前令牌数"需要读取 <code>last_refill_ts</code>。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Token/leaky bucket for any production API</strong> — the boundary burst of a fixed window is a real attack surface and causes unfair behavior for legitimate apps. Fixed window is only acceptable for extremely low-stakes internal throttles where burst prevention doesn't matter. Shopify's production model is token bucket; burst is a feature (absorbs legitimate spiky apps), bounded by capacity.</p>
+        <p class="zh"><strong>生产 API 一律使用令牌桶/漏桶</strong>——固定窗口的边界突发是真实的攻击面，也会对合法应用造成不公平。固定窗口只适用于防突发无关紧要的极低风险内部限流。Shopify 生产模型是令牌桶；突发是特性（吸收合理的突发应用），由容量上限约束。</p>
+      </div>
+
+      <h3><span class="en">② Centralized vs local enforcement — Redis accuracy vs per-node speed</span><span class="zh">② 集中式 vs 本地强制执行——Redis 精度 vs 节点本地速度</span></h3>
+      <p class="en"><strong>The tension:</strong> with 100 stateless gateway nodes, where does the bucket state live — in one shared Redis, or split across node-local memory? The answer trades accuracy for latency.</p>
+      <p class="zh"><strong>矛盾点：</strong>有 100 个无状态网关节点，桶状态应存在哪里——一个共享 Redis，还是分散在节点本地内存？答案是在精度和延迟之间做权衡。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Centralized Redis</span><span class="zh">方案 A · 集中式 Redis</span></div>
+          <p class="en">Every gateway node calls the Redis cluster for every request. A single atomic Lua script reads, recomputes, and writes the bucket state in one round trip.</p>
+          <p class="zh">每个网关节点对每次请求都调用 Redis 集群。单个原子 Lua 脚本在一次往返中完成桶状态的读取、重新计算和写入。</p>
+          <p class="en"><strong>+</strong> Near-perfect accuracy: all 100 nodes share the same authoritative bucket; a client cannot exceed its limit by distributing requests across nodes. No TOCTOU race.</p>
+          <p class="zh"><strong>+</strong> 接近完美的精度：全部 100 个节点共享同一个权威桶；客户端无法通过将请求分散到不同节点来绕过限额。无 TOCTOU 竞态。</p>
+          <p class="en"><strong>−</strong> One network round trip per API call (~1–3 ms same-AZ); Redis is a critical-path dependency — if it degrades, every API request is affected. Hot shard risk for a high-traffic merchant.</p>
+          <p class="zh"><strong>−</strong> 每次 API 调用一次网络往返（同可用区约 1–3 ms）；Redis 是关键路径依赖——降级时影响每次 API 请求。高流量商户存在热分片风险。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Per-node local buckets + async sync</span><span class="zh">方案 B · 节点本地桶 + 异步同步</span></div>
+          <p class="en">Each node holds an in-memory bucket sized at <code>global_limit / node_count</code>. No network hop per request. Nodes periodically reconcile state to Redis.</p>
+          <p class="zh">每个节点持有内存桶，大小为 <code>global_limit / node_count</code>。每次请求无网络跳转。节点定期将状态同步到 Redis。</p>
+          <p class="en"><strong>+</strong> Sub-millisecond check; eliminates Redis as a hot path; extremely high throughput ceiling; natural resilience to Redis outages.</p>
+          <p class="zh"><strong>+</strong> 亚毫秒级检查；消除 Redis 热路径；吞吐上限极高；天然具备 Redis 宕机韧性。</p>
+          <p class="en"><strong>−</strong> Approximate: a client that routes requests to all N nodes simultaneously can use up to N× its per-node budget before reconciliation. At 100 nodes, a client limited to 40 req/s could burst to 4000 req/s between syncs. The error window is bounded only by the reconciliation period.</p>
+          <p class="zh"><strong>−</strong> 近似：客户端若将请求同时路由到所有 N 个节点，在对账前最多可使用 N 倍节点预算。100 个节点下，被限制为 40 次/秒的客户端在同步间隔内可能突发到 4000 次/秒。误差窗口仅受对账周期约束。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Centralized Redis for correctness</strong> — at Shopify's scale, a 100× over-admission window is a real abuse risk and unfair to other tenants. Use per-node local buckets only as a <em>fallback</em> during Redis degradation, or as a local token pre-purchase optimization for extreme hot clients (buy 100 tokens locally, replenish in one Redis call — reduces Redis ops by 100× for that client while keeping global accuracy close).</p>
+        <p class="zh"><strong>以集中式 Redis 保证正确性</strong>——在 Shopify 的规模下，100 倍超额放行窗口是真实的滥用风险，对其他租户也不公平。仅将节点本地桶用作 Redis 降级时的<em>兜底</em>，或作为极热客户端的本地令牌预购优化（本地持有 100 个令牌，一次 Redis 调用补充——将该客户端的 Redis 操作减少 100 倍，同时全局精度接近）。</p>
+      </div>
+
+      <h3><span class="en">③ Request count vs cost-based limiting — uniform vs weighted</span><span class="zh">③ 请求次数 vs 基于成本的限流——统一计费 vs 加权计费</span></h3>
+      <p class="en"><strong>The tension:</strong> should every API call consume one unit of quota regardless of what it does, or should expensive operations cost more? The right answer depends entirely on the protocol.</p>
+      <p class="zh"><strong>矛盾点：</strong>每次 API 调用是否应该消耗一个配额单位（不论其实际工作量），还是昂贵操作应消耗更多？正确答案完全取决于协议。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Count every request as 1</span><span class="zh">方案 A · 每次请求计为 1 单位</span></div>
+          <p class="en">Simple: each call consumes 1 token, regardless of what the query fetches. Works well for REST where endpoints are typed and bounded.</p>
+          <p class="zh">简单：每次调用消耗 1 个令牌，不论查询内容。对于端点类型和边界明确的 REST 效果良好。</p>
+          <p class="en"><strong>+</strong> Zero analysis overhead; zero pre-execution cost; dead simple to implement and reason about. Correct for REST where endpoint cost is roughly bounded by the API contract.</p>
+          <p class="zh"><strong>+</strong> 零分析开销；零执行前成本；实现和推理极其简单。REST 端点成本大致由 API 契约约束，这种方式是正确的。</p>
+          <p class="en"><strong>−</strong> Profoundly wrong for GraphQL: <code>{ orders(first:250) { lineItems(first:100) { ... } } }</code> costs as much as <code>{ shop { name } }</code> under this model. One deeply nested query can consume the equivalent of thousands of simple queries worth of server compute while burning just 1 token.</p>
+          <p class="zh"><strong>−</strong> 对 GraphQL 完全错误：<code>{ orders(first:250) { lineItems(first:100) { ... } } }</code> 在此模型下与 <code>{ shop { name } }</code> 消耗相同配额。一个深度嵌套查询可以消耗数千次简单查询价值的服务器算力，却只烧 1 个令牌。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Cost per request (GraphQL query analysis)</span><span class="zh">方案 B · 按请求成本计费（GraphQL 查询分析）</span></div>
+          <p class="en">Before execution, analyze the parsed AST to compute a point cost (objects = 1 point, connections = <code>first × child cost</code>). Deduct that cost from the bucket atomically. Refund the over-estimate after execution.</p>
+          <p class="zh">执行前，分析已解析的 AST 计算积分成本（对象 = 1 积分，连接 = <code>first × 子节点成本</code>）。原子地从桶中扣除该成本。执行后退还高估部分。</p>
+          <p class="en"><strong>+</strong> Fair: expensive queries cost proportionally more. One deeply-nested query can't drain a tenant's budget while cheap queries are still affordable. Accurately reflects server compute consumed.</p>
+          <p class="zh"><strong>+</strong> 公平：昂贵查询成本更高。一个深度嵌套查询无法在廉价查询仍可负担的情况下耗尽租户预算。准确反映服务器实际算力消耗。</p>
+          <p class="en"><strong>−</strong> Requires AST static analysis before execution; adds a parse step; the estimated cost may differ from actual (solved by the refund mechanism). More complex to implement, explain to developers, and debug.</p>
+          <p class="zh"><strong>−</strong> 需要在执行前进行 AST 静态分析；增加解析步骤；估算成本可能与实际不符（通过退款机制解决）。实现、向开发者解释和调试更复杂。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Cost-based for GraphQL, request-count for REST</strong> — they serve different protocols with different cost profiles. One size does not fit both. The static-estimate-then-refund pattern gives the best of both worlds: you can gate before execution (which is required — you can't know the real cost without running the query) and refund the over-estimate after, giving the client fair accounting without wasted server compute.</p>
+        <p class="zh"><strong>GraphQL 使用基于成本的限流，REST 使用请求次数计费</strong>——两者服务于成本特征不同的协议，一刀切不适用。"静态估算 + 执行后退还"模式两全其美：执行前可以设门（这是必须的——不跑查询就无法知道真实成本），执行后退还高估部分，为客户端提供公平计账，同时不浪费服务器算力。</p>
+      </div>
+
+      <h3><span class="en">④ Fail open vs fail closed — availability vs strict enforcement on store outage</span><span class="zh">④ 失败开放 vs 失败关闭——存储宕机时的可用性 vs 严格执行</span></h3>
+      <p class="en"><strong>The tension:</strong> the rate limiter is in the critical path of every API call. When its backing store (Redis) degrades, should you protect the platform from over-admission — or protect merchants from losing API availability?</p>
+      <p class="zh"><strong>矛盾点：</strong>限流器处于每次 API 调用的关键路径上。当其后端存储（Redis）降级时，应该保护平台免受超额放行，还是保护商户不失去 API 可用性？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Fail closed</span><span class="zh">方案 A · 失败关闭</span></div>
+          <p class="en">If Redis is unreachable, reject all requests with <code>503 Service Unavailable</code> until the store recovers.</p>
+          <p class="zh">如果 Redis 不可达，拒绝所有请求并返回 <code>503 Service Unavailable</code>，直到存储恢复。</p>
+          <p class="en"><strong>+</strong> Zero risk of over-admission during the outage; the platform is protected from any burst that would have passed during the window.</p>
+          <p class="zh"><strong>+</strong> 宕机期间零超额放行风险；平台免受宕机窗口内本可通过的任何突发冲击。</p>
+          <p class="en"><strong>−</strong> The entire API platform goes dark — every merchant's app stops working. Revenue is lost, SLAs are breached, and merchants are harmed by a Redis outage that had nothing to do with their behavior. The cure is worse than the disease.</p>
+          <p class="zh"><strong>−</strong> 整个 API 平台全部停摆——每个商户的应用停止工作。收入损失、SLA 违约，商户因与其行为无关的 Redis 宕机而受损。药方比疾病更糟糕。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Fail open with conservative local cap</span><span class="zh">方案 B · 失败开放加保守本地限流兜底</span></div>
+          <p class="en">Fall back to a per-node in-memory token bucket sized at <code>global_limit / node_count</code>. Allow requests up to the local cap; log every fallback event; revert to Redis when it recovers.</p>
+          <p class="zh">回退到节点内存令牌桶，大小为 <code>global_limit / node_count</code>。在本地限额内放行请求；记录每个降级事件；Redis 恢复后立即恢复到 Redis 路径。</p>
+          <p class="en"><strong>+</strong> Merchants keep their API working. Bounded over-admission: each node independently enforces a conservative cap, so the total over-admission is bounded by the outage window and local cap — not unbounded.</p>
+          <p class="zh"><strong>+</strong> 商户 API 保持可用。有界超额放行：每个节点独立执行保守限额，总超额放行由宕机窗口和本地限额共同约束——有界而非无界。</p>
+          <p class="en"><strong>−</strong> Slightly under-limiting: N nodes × <code>global_limit/N</code> = global_limit in the best case, but routing imbalance means some nodes see more traffic and will cap sooner. A determined abuser can try to concentrate requests on nodes that haven't yet exhausted their local cap.</p>
+          <p class="zh"><strong>−</strong> 轻微限制不足：N 个节点 × <code>global_limit/N</code> = 理想情况下等于全局限额，但路由不均衡意味着部分节点流量更多，更早耗尽本地限额。有意图的滥用者可以尝试将请求集中到尚未耗尽本地限额的节点。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Fail open with local cap is the right default for Shopify</strong>: merchant availability outweighs strict enforcement during a short Redis outage. The industry consensus for rate limiters is fail-open. Add a circuit breaker around the Redis call (~100 ms timeout) to detect degradation fast, and always log fallback events so the on-call team has full observability. If you want extra security, make the local cap more conservative (e.g. <code>global_limit / (2 × node_count)</code>) to reduce over-admission further.</p>
+        <p class="zh"><strong>对 Shopify 而言，失败开放加本地限流兜底是正确的默认选择</strong>：短暂 Redis 宕机期间，商户可用性优先于严格执行。业界对限流器的共识是失败开放。在 Redis 调用周围添加熔断器（约 100 ms 超时）以快速检测降级，并始终记录降级事件以确保值班团队完全可见。如需额外安全保障，可将本地限额调得更保守（如 <code>global_limit / (2 × node_count)</code>）以进一步减少超额放行。</p>
+      </div>
+
+      <h3><span class="en">⑤ Global vs per-region limits — cross-region accuracy vs latency</span><span class="zh">⑤ 全局 vs 按地区限额——跨地区精度 vs 延迟</span></h3>
+      <p class="en"><strong>The tension:</strong> Shopify runs gateways in multiple regions. Should a client's quota be globally enforced (one Redis that all regions call) or independently enforced per region (each region has its own Redis)?</p>
+      <p class="zh"><strong>矛盾点：</strong>Shopify 在多个地区运行网关。客户端的配额应全局强制执行（所有地区调用同一个 Redis），还是按地区独立执行（每个地区有自己的 Redis）？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Single global Redis</span><span class="zh">方案 A · 单一全局 Redis</span></div>
+          <p class="en">All gateway nodes in all regions call one global Redis cluster. A client's usage in US-East and EU-West is perfectly aggregated.</p>
+          <p class="zh">所有地区的所有网关节点调用同一个全局 Redis 集群。客户端在 US-East 和 EU-West 的使用量被完美聚合。</p>
+          <p class="en"><strong>+</strong> Exact global accounting: a client cannot bypass a global limit by splitting traffic across regions.</p>
+          <p class="zh"><strong>+</strong> 精确的全局计账：客户端无法通过跨地区分散流量来绕过全局限额。</p>
+          <p class="en"><strong>−</strong> Cross-region round trip: if the global Redis is in US-East, EU gateways add ~50–80 ms of limiter overhead to every request — more than the entire target budget of <code>&lt;5 ms</code>. This is simply not viable at Shopify's latency requirements.</p>
+          <p class="zh"><strong>−</strong> 跨地区往返：如果全局 Redis 在 US-East，EU 网关的每次请求会增加约 50–80 ms 的限流开销——超过 <code>&lt;5 ms</code> 目标预算的整体。在 Shopify 的延迟要求下，这根本不可行。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Per-region Redis</span><span class="zh">方案 B · 按地区 Redis</span></div>
+          <p class="en">Each region runs its own Redis cluster. Gateways call the local Redis, ~1–3 ms. Each region independently enforces the full client quota.</p>
+          <p class="zh">每个地区运行自己的 Redis 集群。网关调用本地 Redis，约 1–3 ms。每个地区独立执行完整的客户端配额。</p>
+          <p class="en"><strong>+</strong> Low latency: satisfies the <code>&lt;5 ms</code> overhead budget easily. Simple failover model: a region's Redis outage only affects that region.</p>
+          <p class="zh"><strong>+</strong> 低延迟：轻松满足 <code>&lt;5 ms</code> 开销预算。故障转移模型简单：某地区 Redis 宕机只影响该地区。</p>
+          <p class="en"><strong>−</strong> A client can simultaneously use the full quota in every region — a theoretical global over-admission of <code>quota × regions</code>. In practice, a client's traffic is not evenly distributed across regions; the practical over-admission is much smaller and bounded by actual traffic distribution.</p>
+          <p class="zh"><strong>−</strong> 客户端可以在每个地区同时使用完整配额——理论上全局超额放行为 <code>quota × 地区数</code>。实际上，客户端流量并非均匀分布于各地区；实际超额放行要小得多，并受实际流量分布约束。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Per-region for any globally-distributed API</strong> — the cross-region latency of a global Redis is incompatible with a <code>&lt;5 ms</code> limiter budget. The global over-admission risk is acceptable at Shopify's traffic distribution: most clients are concentrated in one or two regions, and the absolute per-region quota is generous enough that per-region enforcement is practically equivalent to global enforcement for normal usage patterns.</p>
+        <p class="zh"><strong>任何全球分布式 API 都应按地区部署</strong>——全局 Redis 的跨地区延迟与 <code>&lt;5 ms</code> 限流预算不兼容。在 Shopify 的流量分布下，全局超额放行风险可接受：大多数客户端集中在一两个地区，且按地区的配额绝对值足够大，使得按地区执行在正常使用模式下实际上等同于全局执行。</p>
+      </div>
+
+      <h3><span class="en">⑥ GraphQL cost: static vs runtime measurement</span><span class="zh">⑥ GraphQL 成本：静态 vs 运行时度量</span></h3>
+      <p class="en"><strong>The tension:</strong> to gate a GraphQL request, you need to know its cost. But you cannot know the true cost until you run it. You must choose between a fast over-estimate (before execution) or an exact measure (after execution — but then it's too late to reject).</p>
+      <p class="zh"><strong>矛盾点：</strong>为 GraphQL 请求设门需要知道其成本。但不跑查询就无法知道真实成本。你必须在快速高估（执行前）和精确度量（执行后——但那时拒绝已为时太晚）之间做选择。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Static analysis at parse time</span><span class="zh">方案 A · 解析时静态分析</span></div>
+          <p class="en">Walk the query AST before execution; compute cost from <code>first</code>/<code>last</code> arguments and field types. Gate on this estimate; deduct from bucket.</p>
+          <p class="zh">在执行前遍历查询 AST；根据 <code>first</code>/<code>last</code> 参数和字段类型计算成本。以此估算设门；从桶中扣除。</p>
+          <p class="en"><strong>+</strong> Fast, zero execution overhead for rejected requests. Gate fires before any resolver runs — no wasted server compute on over-budget queries.</p>
+          <p class="zh"><strong>+</strong> 快速，被拒绝的请求零执行开销。在任何 resolver 运行前触发门控——超预算查询不浪费服务器算力。</p>
+          <p class="en"><strong>−</strong> Approximates: <code>orders(first:250)</code> is charged for 250 orders even if the database only has 3. The client is over-charged for sparse data — unfair if they hit the rate limit due to over-estimation on mostly-empty pages.</p>
+          <p class="zh"><strong>−</strong> 存在近似：<code>orders(first:250)</code> 即使数据库只有 3 条记录也按 250 条计费。客户端为稀疏数据多付——若因大量空页的高估而触发限流，对客户端不公平。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Runtime measurement</span><span class="zh">方案 B · 运行时度量</span></div>
+          <p class="en">Allow the request, run it, measure the actual cost of objects returned by resolvers, then decide whether to throttle future requests.</p>
+          <p class="zh">放行请求，运行它，度量 resolver 实际返回的对象成本，然后决定是否对未来请求限流。</p>
+          <p class="en"><strong>+</strong> Exact: clients are charged for compute actually consumed. No over-charging for sparse data.</p>
+          <p class="zh"><strong>+</strong> 精确：客户端只为实际消耗的算力付费。稀疏数据不会多收费。</p>
+          <p class="en"><strong>−</strong> Cannot gate before execution — the request must run before you know the cost. An abusive deep-nested query wastes server compute even if it gets rate-limited after. Post-hoc enforcement is reactive, not preventive.</p>
+          <p class="zh"><strong>−</strong> 无法在执行前设门——必须先运行请求才能知道成本。一个滥用的深度嵌套查询即使事后被限流，也已浪费服务器算力。事后执行是被动响应，而非主动防御。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Static estimate to gate + refund the delta after execution</strong> — this is the best of both: you prevent execution of over-budget queries (protecting server compute), and after execution you measure <code>actualQueryCost</code> and return the over-estimated tokens to the bucket. The client pays only for what was actually fetched, and you never waste compute on runaway queries. Shopify's API does exactly this, reporting both <code>requestedQueryCost</code> and <code>actualQueryCost</code> in the <code>extensions.cost</code> response field.</p>
+        <p class="zh"><strong>以静态估算设门 + 执行后退还差值</strong>——两全其美：防止超预算查询执行（保护服务器算力），执行后度量 <code>actualQueryCost</code> 并将多估算的令牌退回桶中。客户端只为实际获取的内容付费，你也不会在失控查询上浪费算力。Shopify 的 API 正是这样做的，在响应的 <code>extensions.cost</code> 字段中同时报告 <code>requestedQueryCost</code> 和 <code>actualQueryCost</code>。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

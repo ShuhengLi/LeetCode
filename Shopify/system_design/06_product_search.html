@@ -954,6 +954,40 @@ POST /_aliases
         resources alongside live query traffic causes severe latency spikes. Always build the new index alongside the old one
         and flip the alias atomically.</span><span class="zh">若将新映射 PUT 到线上索引，Elasticsearch 可能在索引完全更新前拒绝不符合新映射的文档，造成静默数据丢失窗口。此外，重建索引操作与线上查询流量共同消耗集群资源会导致严重的延迟尖峰。务必在旧索引旁边构建新索引，然后原子性地切换别名。</span>
       </div>
+
+      <h3><span class="en">⑦ Indexing pipeline under load — absorbing a 100k-product bulk edit without lag spikes</span><span class="zh">⑦ 高负载下的索引管道 —— 吸收 10 万件商品的批量编辑而不引发延迟峰值</span></h3>
+      <p><span class="en">A merchant who bulk-edits their entire catalog — updating prices before a sale, or changing vendor names — fires a flood of CDC events in seconds. The naive response of consuming every event as fast as possible creates two problems: (1) the Indexer overwhelms the Elasticsearch cluster with thousands of individual document writes, causing cluster-wide latency spikes that hurt all shops' query performance; (2) a single merchant's bulk job can monopolize Indexer throughput, starving neighboring shops of near-real-time updates for minutes.</span><span class="zh">一个批量编辑整个目录的商家——在促销前更新价格，或修改供应商名称——会在数秒内触发大量 CDC 事件。对所有事件无差别地尽快消费会产生两个问题：(1) Indexer 以数千个单独文档写入淹没 Elasticsearch 集群，造成全集群延迟尖峰，影响所有店铺的查询性能；(2) 单个商家的批量任务可独占 Indexer 吞吐量，使相邻店铺在数分钟内无法享受近实时更新。</span></p>
+      <p><span class="en">The solution combines three mechanisms: <strong>Kafka as a durable buffer</strong>, <strong>batched bulk upsert</strong>, and <strong>per-shop fairness</strong>.</span><span class="zh">解决方案结合三种机制：<strong>Kafka 作为持久缓冲区</strong>、<strong>批量 bulk upsert</strong>，以及<strong>每店铺公平调度</strong>。</span></p>
+
+      <p><span class="en"><strong>Write path never blocks on the index.</strong> The Catalog Service writes to MySQL and outbox — it has no knowledge of how backed-up the Indexer is. Kafka absorbs the 100k-event burst with zero back-pressure to the write path. The merchant's save operations complete at normal speed regardless of how long it takes to drain the Kafka lag.</span><span class="zh"><strong>写入路径永远不会因索引而阻塞。</strong>Catalog Service 写入 MySQL 和 outbox——它完全不知道 Indexer 有多积压。Kafka 以零背压吸收 10 万事件的突发，对写入路径毫无影响。无论 Kafka 延迟需要多久才能消化完，商家的保存操作都以正常速度完成。</span></p>
+
+      <p><span class="en"><strong>Batched bulk upsert amortizes Elasticsearch overhead.</strong> Rather than sending one HTTP request per event, the Indexer accumulates events for a micro-batch window (~200 ms) or up to a maximum batch size (~500 documents) and flushes them in a single <code>_bulk</code> API call. Elasticsearch's bulk API is significantly cheaper per-document than individual index requests: it reduces HTTP connection overhead, allows the shard to merge segments less often, and batches the internal WAL write. At 50k events/sec, micro-batching reduces the number of Elasticsearch requests by 100×.</span><span class="zh"><strong>批量 bulk upsert 摊销 Elasticsearch 开销。</strong>Indexer 不是每个事件发送一个 HTTP 请求，而是在微批时间窗口（约 200 ms）或达到最大批量大小（约 500 个文档）时积累事件，然后通过单次 <code>_bulk</code> API 调用刷写。Elasticsearch 的 bulk API 相比单独索引请求，每文档成本显著更低：减少 HTTP 连接开销、减少分片段合并频率，以及批量执行内部 WAL 写入。在 5 万事件/秒下，微批处理将 Elasticsearch 请求数量减少 100 倍。</span></p>
+
+      <p><span class="en"><strong>Per-shop fairness prevents one bulk job from starving neighbors.</strong> Kafka is partitioned by <code>shop_id</code>, so events for each shop arrive on a dedicated partition. The Indexer assigns one consumer thread per partition. Inside each consumer, apply a <strong>token-bucket rate limit per shop</strong>: cap any single shop to at most some percentage of total bulk throughput per time window. A shop bursting 100k updates will have its events queued in Kafka (growing consumer lag for that shop) while neighboring shops on other partitions continue consuming at normal speed — fully independent goroutines/threads. The bulk-editing shop's lag drains steadily in the background, typically completing in minutes, while the freshness SLO for the rest of the platform is unaffected.</span><span class="zh"><strong>每店铺公平调度防止一个批量任务饿死邻居。</strong>Kafka 按 <code>shop_id</code> 分区，因此每个店铺的事件到达专属分区。Indexer 为每个分区分配一个消费线程。在每个消费者内部，应用<strong>每店铺令牌桶限速</strong>：将任意单个店铺在时间窗口内的批量吞吐量上限设为总量的某个百分比。批量编辑 10 万件商品的店铺，其事件将在 Kafka 中排队（该店铺的消费者延迟增加），而其他分区上的相邻店铺继续以正常速度消费——完全独立的 goroutine/线程。批量编辑店铺的延迟在后台平稳消化，通常在数分钟内完成，而平台其余部分的新鲜度 SLO 不受影响。</span></p>
+
+      <p><span class="en"><strong>Monitor consumer lag as the freshness SLO.</strong> Kafka consumer group lag (messages behind the latest offset) is the leading metric for indexing freshness. A healthy cluster maintains lag &lt; a few hundred messages (sub-second delivery). A spike in lag for one shop partition signals a bulk edit in progress — expected and acceptable. A rising lag across <em>all</em> partitions signals an Indexer or Elasticsearch capacity problem requiring paging.</span><span class="zh"><strong>监控消费者延迟作为新鲜度 SLO。</strong>Kafka 消费者组延迟（落后最新偏移量的消息数）是索引新鲜度的领先指标。健康集群保持延迟低于几百条消息（亚秒级传递）。单个店铺分区的延迟尖峰表示正在处理批量编辑——这是预期的、可接受的。<em>所有</em>分区延迟同时上升则表示 Indexer 或 Elasticsearch 容量问题，需要告警处理。</span></p>
+
+      <pre><code><span class="c"># Indexer consumer loop — per Kafka partition (one goroutine/thread per shop shard)</span>
+<span class="k">func</span> <span class="n">consumePartition</span>(partition, shopBucket):
+  batch = []
+  <span class="k">for</span> msg <span class="k">in</span> partition.poll(maxWaitMs=<span class="n">200</span>, maxRecords=<span class="n">500</span>):
+    <span class="c"># per-shop token bucket: skip / re-queue if this shop is over its rate quota</span>
+    <span class="k">if</span> <span class="k">not</span> shopBucket[msg.shopId].consume(<span class="n">1</span>):
+      partition.seek(msg.offset)   <span class="c"># back-pressure: re-read this message next loop</span>
+      <span class="k">break</span>
+    doc = denormalize(msg)          <span class="c"># fetch variants + collections from read replica</span>
+    batch.append({<span class="s">"index"</span>: {<span class="s">"_id"</span>: doc.productId, <span class="s">"routing"</span>: doc.shopId}}, doc)
+
+  <span class="k">if</span> batch:
+    resp = es.bulk(body=batch)      <span class="c"># single _bulk call — amortizes HTTP + WAL overhead</span>
+    <span class="k">for</span> item <span class="k">in</span> resp.errors:
+      deadLetterQueue.send(item)    <span class="c"># mapping conflicts, circuit-breaker trips → DLQ</span>
+    partition.commit()              <span class="c"># only commit after successful flush</span></code></pre>
+
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Why decoupling indexing from the write path keeps both fast</span><span class="zh">将索引与写入路径解耦为何能让两者都保持高速</span></span>
+        <p><span class="en">If the Indexer wrote synchronously on the Catalog Service's write path, a slow Elasticsearch cluster or a large bulk edit would directly inflate merchant save latency — even though the merchant only cares that their data is durably stored in MySQL. By using Kafka as the decoupling layer, the write path's performance is bounded only by MySQL write speed, and the Indexer's performance is bounded only by Elasticsearch throughput. The two can be scaled, tuned, and degraded entirely independently. This is the architectural insight that makes seconds-level search freshness achievable at 50k mutation events per second without compromising write availability.</span><span class="zh">如果 Indexer 在 Catalog Service 的写入路径上同步写入，Elasticsearch 变慢或大批量编辑会直接拉高商家保存延迟——尽管商家只关心数据被持久化到 MySQL。通过使用 Kafka 作为解耦层，写入路径的性能仅受 MySQL 写入速度约束，Indexer 的性能仅受 Elasticsearch 吞吐量约束。两者可以完全独立地进行扩缩容、调优和降级。这是在 5 万事件/秒的变更速率下实现秒级搜索新鲜度、同时不损害写入可用性的关键架构洞察。</span></p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -1000,6 +1034,135 @@ POST /_aliases
           </tr>
         </tbody>
       </table>
+
+      <p><span class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their pros and cons, and when each is the right choice.</span><span class="zh">上表是一眼速览版。以下是 staff 候选人应能讲出的推理：每行为何有两个选项、各自的优缺点，以及如何做选择。</span></p>
+
+      <h3><span class="en">① Multi-tenancy topology — shared index vs index-per-shop</span><span class="zh">① 多租户拓扑 —— 共享索引 vs 每店铺独立索引</span></h3>
+      <p><span class="en"><strong>The tension:</strong> Shopify hosts millions of shops. Every shop needs its own scoped search. Should each shop get a dedicated Elasticsearch index for perfect isolation, or share one large index with per-shop routing?</span><span class="zh"><strong>矛盾点：</strong>Shopify 托管数百万店铺，每个店铺需要独立的搜索范围。是给每个店铺一个专属 Elasticsearch 索引以获得完美隔离，还是共用一个大索引并按店铺路由？</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Index-per-shop</span><span class="zh">方案 A · 每店铺独立索引</span></div>
+          <p><span class="en">Every shop gets its own Elasticsearch index with its own mapping, analyzers, and synonym configuration.</span><span class="zh">每个店铺拥有独立的 Elasticsearch 索引，有自己的映射、分析器和同义词配置。</span></p>
+          <p><span class="en"><strong>+</strong> Total isolation — one shop's reindex, mapping change, or query load never affects another; per-shop analyzer and synonym configuration is trivial.</span><span class="zh"><strong>+</strong> 完全隔离——一个店铺的重建索引、映射变更或查询负载永远不影响另一个；每店铺的分析器和同义词配置简单直接。</span></p>
+          <p><span class="en"><strong>−</strong> Millions of tiny indices explode JVM metaspace and shard counts (Elasticsearch recommends &lt; 10k shards per node); a shop with 5 products still consumes a full index overhead; cluster management becomes untenable at Shopify's merchant count.</span><span class="zh"><strong>−</strong> 数百万小索引会导致 JVM 元空间爆炸，分片数量超限（Elasticsearch 建议每节点少于 1 万分片）；仅 5 件商品的店铺仍要承担完整的索引开销；在 Shopify 的商家体量下，集群管理将无法维系。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Shared index + <code>shop_id</code> routing</span><span class="zh">方案 B · 共享索引 + <code>shop_id</code> 路由</span></div>
+          <p><span class="en">All shops land in the same index; documents use <code>_routing=shop_id</code> to co-locate a shop's data on the same shard, and every query includes a mandatory <code>term</code> filter on <code>shop_id</code>.</span><span class="zh">所有店铺共用同一索引；文档使用 <code>_routing=shop_id</code> 将同一店铺的数据集中在相同分片，每次查询都附带强制的 <code>shop_id</code> <code>term</code> 过滤器。</span></p>
+          <p><span class="en"><strong>+</strong> Manageable shard count at any number of shops; tiny shops are nearly free (a few documents in a shared shard); operational simplicity.</span><span class="zh"><strong>+</strong> 无论店铺数量多少，分片数量始终可控；小店铺几乎零成本（共享分片中寥寥几条文档）；运维简单。</span></p>
+          <p><span class="en"><strong>−</strong> Noisy-neighbor risk — a large merchant running heavy aggregations can slow queries for co-resident shops on the same shard; per-shop analyzer configuration requires either custom per-index mapping or a workaround.</span><span class="zh"><strong>−</strong> 嘈杂邻居风险——大型商家的重聚合查询可能拖慢同分片其他店铺的查询；每店铺独立分析器配置需要自定义 per-index 映射或变通方案。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en"><strong>Default to shared index</strong> for the long tail of small/medium shops — index-per-shop is operationally impossible at millions of tenants. Promote shops past ~500k products (or those with dedicated SLA contracts) to their own dedicated index, where the per-shop isolation is worth the extra cluster overhead. The routing logic needs to know which bucket a shop is in, but that is a simple lookup in a config table.</span><span class="zh"><strong>中小店铺长尾默认使用共享索引</strong>——在数百万租户的规模下，每店铺独立索引在运维上不可行。将超过约 50 万件商品（或有专属 SLA 合同）的店铺迁移到专属索引，此时每店铺隔离的价值超过额外的集群开销。路由逻辑需要知道店铺属于哪个分桶，但这只是配置表中的简单查询。</span></p>
+      </div>
+
+      <h3><span class="en">② Index freshness strategy — async CDC vs synchronous dual-write</span><span class="zh">② 索引新鲜度策略 —— 异步 CDC vs 同步双写</span></h3>
+      <p><span class="en"><strong>The tension:</strong> when a merchant saves a product, when does the change appear in search results? You can make the write path also write to the search cluster synchronously, or you can let an async pipeline carry the update seconds later.</span><span class="zh"><strong>矛盾点：</strong>商家保存商品后，变更何时出现在搜索结果中？可以在写入路径上同步写入搜索集群，也可以通过异步管道在数秒后传递更新。</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Async CDC / Kafka pipeline</span><span class="zh">方案 A · 异步 CDC / Kafka 管道</span></div>
+          <p><span class="en">The Catalog Service writes to MySQL and an outbox atomically. Debezium reads the binlog and publishes to Kafka. The Indexer fleet consumes and bulk-upserts into Elasticsearch — typically completing in under 5 seconds end-to-end.</span><span class="zh">Catalog Service 原子地写入 MySQL 和 outbox。Debezium 读取 binlog 并发布到 Kafka。Indexer 集群消费并批量 upsert 到 Elasticsearch——通常端到端在 5 秒内完成。</span></p>
+          <p><span class="en"><strong>+</strong> Write path never blocks on search cluster health; the search cluster can be slow, reindexing, or restarted without affecting merchant saves; Kafka buffers spikes (e.g., a 100k-product bulk edit) without back-pressuring the write path.</span><span class="zh"><strong>+</strong> 写入路径永远不会因搜索集群健康状态而阻塞；搜索集群无论慢速、重建索引还是重启，都不影响商家保存；Kafka 缓冲突发（如 10 万件商品的批量编辑），不对写入路径产生背压。</span></p>
+          <p><span class="en"><strong>−</strong> 2–5 second lag between save and search visibility; requires CDC infrastructure (Debezium, Kafka) which adds operational complexity.</span><span class="zh"><strong>−</strong> 保存与搜索可见之间有 2–5 秒的延迟；需要 CDC 基础设施（Debezium、Kafka），增加运维复杂度。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Synchronous dual-write</span><span class="zh">方案 B · 同步双写</span></div>
+          <p><span class="en">On every product save, the Catalog Service writes to MySQL <em>and</em> calls the Elasticsearch bulk API in the same request lifecycle.</span><span class="zh">每次商品保存时，Catalog Service 在同一请求生命周期内同时写入 MySQL <em>和</em> 调用 Elasticsearch bulk API。</span></p>
+          <p><span class="en"><strong>+</strong> Near-instant freshness (sub-second); simple conceptually — the write path owns the update end-to-end.</span><span class="zh"><strong>+</strong> 近乎即时的新鲜度（亚秒级）；概念上简单——写入路径端到端拥有更新。</span></p>
+          <p><span class="en"><strong>−</strong> Couples write availability to search cluster health — if Elasticsearch is slow or degraded, merchant saves slow down or fail; bulk edit of 100k products blocks the write path; a search cluster outage takes down product saves.</span><span class="zh"><strong>−</strong> 将写入可用性与搜索集群健康状态耦合——Elasticsearch 变慢或降级时，商家保存操作也会变慢或失败；10 万件商品的批量编辑会阻塞写入路径；搜索集群故障会导致商品保存不可用。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en"><strong>Async CDC is the right default</strong> for nearly every production search system. Storefront search has acceptable eventual consistency — buyers don't search for a product in the same second a merchant publishes it. Only consider synchronous dual-write if the SLA demands sub-second freshness, the write volume is low, and you are willing to accept write availability coupling.</span><span class="zh"><strong>异步 CDC 是几乎所有生产搜索系统的正确默认选择。</strong>店铺搜索的最终一致性是可接受的——买家不会在商家发布商品的同一秒就进行搜索。只有当 SLA 要求亚秒级新鲜度、写入量较低、且愿意接受写入可用性与搜索健康状态耦合时，才考虑同步双写。</span></p>
+      </div>
+
+      <h3><span class="en">③ Search technology — Elasticsearch/OpenSearch vs SQL full-text</span><span class="zh">③ 搜索技术 —— Elasticsearch/OpenSearch vs SQL 全文检索</span></h3>
+      <p><span class="en"><strong>The tension:</strong> every modern RDBMS has some full-text search capability. Is it worth operating a separate search cluster?</span><span class="zh"><strong>矛盾点：</strong>每个现代关系数据库都有一定的全文检索能力。值得单独运维一个搜索集群吗？</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Elasticsearch / OpenSearch</span><span class="zh">方案 A · Elasticsearch / OpenSearch</span></div>
+          <p><span class="en">A dedicated inverted-index search cluster handling query, scoring, aggregations, and typo-tolerance natively.</span><span class="zh">专用的倒排索引搜索集群，原生支持查询、评分、聚合和拼写容错。</span></p>
+          <p><span class="en"><strong>+</strong> BM25 relevance ranking out of the box; facet aggregations in a single request; fuzzy matching; edge-ngram autocomplete; scales to 5B+ documents; query latency &lt; 10 ms on typical catalogs.</span><span class="zh"><strong>+</strong> 开箱即用的 BM25 相关性排序；单次请求完成分面聚合；模糊匹配；edge-ngram 自动补全；可扩展到 50 亿+文档；典型目录查询延迟低于 10 ms。</span></p>
+          <p><span class="en"><strong>−</strong> Separate system to operate, monitor, scale, and upgrade; JVM-based — memory-intensive; requires a CDC pipeline to stay fresh.</span><span class="zh"><strong>−</strong> 需要独立运维、监控、扩缩容和升级的独立系统；基于 JVM——内存密集；需要 CDC 管道保持新鲜度。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · SQL full-text (MATCH … AGAINST / LIKE)</span><span class="zh">方案 B · SQL 全文检索（MATCH … AGAINST / LIKE）</span></div>
+          <p><span class="en">Use the database's native full-text index (MySQL FULLTEXT, Postgres tsvector) or simple LIKE queries.</span><span class="zh">使用数据库原生的全文索引（MySQL FULLTEXT、Postgres tsvector）或简单的 LIKE 查询。</span></p>
+          <p><span class="en"><strong>+</strong> Zero extra infrastructure; no CDC pipeline; writes are immediately searchable.</span><span class="zh"><strong>+</strong> 无需额外基础设施；无需 CDC 管道；写入后立即可搜索。</span></p>
+          <p><span class="en"><strong>−</strong> <code>LIKE '%term%'</code> cannot use an index (full table scan on every query at 5B rows); no relevance scoring; N expensive GROUP BY sub-queries for facet counts; no built-in typo tolerance or synonym support; does not scale to Shopify's volume.</span><span class="zh"><strong>−</strong> <code>LIKE '%term%'</code> 无法使用索引（50 亿行每次查询全表扫描）；无相关性评分；分面计数需要 N 个高代价 GROUP BY 子查询；无内置拼写容错或同义词支持；无法扩展到 Shopify 的体量。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en">At Shopify's scale, <strong>a search engine is non-negotiable</strong>. SQL full-text is reasonable for a prototype or a small single-store app, but it fails on relevance, faceting, and throughput at any meaningful scale. The operational cost of Elasticsearch is justified from the moment facets or ranking quality matter.</span><span class="zh">在 Shopify 的规模下，<strong>搜索引擎不可替代</strong>。SQL 全文检索对于原型或小型单店应用是合理的，但在任何有意义的规模下，它在相关性、分面和吞吐量上都会失败。一旦分面或排序质量有要求，Elasticsearch 的运维成本就是合理的。</span></p>
+      </div>
+
+      <h3><span class="en">④ Inventory in the search index — denormalized flag vs real-time join</span><span class="zh">④ 搜索索引中的库存 —— 反规范化标志 vs 实时关联</span></h3>
+      <p><span class="en"><strong>The tension:</strong> inventory quantity changes with every sale and return — potentially thousands of times per second across all shops. Should the search index hold a <code>has_inventory</code> flag (fast but potentially stale) or join live inventory at query time (always fresh but slower)?</span><span class="zh"><strong>矛盾点：</strong>库存数量随每次销售和退货变化——跨所有店铺每秒可能变化数千次。搜索索引应持有 <code>has_inventory</code> 标志（快速但可能过时），还是在查询时关联实时库存（始终最新但更慢）？</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Store <code>has_inventory</code> in the index</span><span class="zh">方案 A · 在索引中存储 <code>has_inventory</code></span></div>
+          <p><span class="en">A boolean field on the document, updated whenever an inventory CDC event arrives. The search query filters <code>has_inventory: true</code> with zero extra I/O.</span><span class="zh">文档上的布尔字段，每当库存 CDC 事件到达时更新。搜索查询以零额外 I/O 过滤 <code>has_inventory: true</code>。</span></p>
+          <p><span class="en"><strong>+</strong> Sub-millisecond filter cost; no extra service call on the query path; inventory changes are propagated near-real-time via the same CDC pipeline.</span><span class="zh"><strong>+</strong> 过滤成本亚毫秒级；查询路径上无额外服务调用；库存变更通过同一 CDC 管道近实时传播。</span></p>
+          <p><span class="en"><strong>−</strong> CDC lag means up to ~5 seconds of staleness — a sold-out product may still appear as in-stock briefly, and a newly restocked product may stay hidden slightly too long.</span><span class="zh"><strong>−</strong> CDC 延迟意味着最多约 5 秒的过时——已售罄商品可能短暂仍显示为有货，新补货商品可能略微延迟才出现。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Join inventory at query time</span><span class="zh">方案 B · 查询时关联库存</span></div>
+          <p><span class="en">Retrieve the top-N candidates from the search cluster ignoring inventory status, then call the Inventory Service in a batched request to filter or re-rank based on live stock.</span><span class="zh">从搜索集群检索 top-N 候选（忽略库存状态），然后批量调用 Inventory Service 根据实时库存进行过滤或重排序。</span></p>
+          <p><span class="en"><strong>+</strong> Always exactly fresh — the buyer sees real-time stock, not stale CDC data.</span><span class="zh"><strong>+</strong> 始终精确最新——买家看到的是实时库存，而非过时的 CDC 数据。</span></p>
+          <p><span class="en"><strong>−</strong> Adds 10–20 ms per query for the inventory service round-trip; requires the inventory service to be highly available (it becomes a query-path dependency); over-fetching candidates wastes cluster compute; high QPS multiplied across all queries amplifies inventory service load.</span><span class="zh"><strong>−</strong> 每次查询增加 10–20 ms 的库存服务往返；要求库存服务高度可用（成为查询路径依赖）；过度获取候选浪费集群计算；高 QPS 乘以所有查询会放大库存服务负载。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en"><strong>Store in the index with near-real-time CDC updates as the default.</strong> For storefront search, a 5-second lag on the in-stock flag is acceptable — buyers rarely search for a product in the exact second it sells out. Use the query-time join selectively: for "show only in-stock items" browse pages where the UX degradation from stale inventory is high, or where the inventory service can batch the lookup cheaply.</span><span class="zh"><strong>默认将库存存储在索引中并通过近实时 CDC 更新。</strong>对于店铺搜索，库存标志的 5 秒延迟是可接受的——买家很少会在商品售罄的精确那一秒搜索它。选择性使用查询时关联：适用于"仅显示有货商品"的浏览页（过时库存导致的用户体验损失较大），或库存服务能低成本批量查询的场景。</span></p>
+      </div>
+
+      <h3><span class="en">⑤ Relevance config — global BM25 vs per-merchant tuning</span><span class="zh">⑤ 相关性配置 —— 全局 BM25 vs 每商家独立调优</span></h3>
+      <p><span class="en"><strong>The tension:</strong> the optimal relevance model for a sneaker shop (where color and size options matter) is different from a bookstore (where author and series rank highly). Should every merchant get custom relevance, or use a shared model with merchant-writable boost signals?</span><span class="zh"><strong>矛盾点：</strong>球鞋店（颜色和尺码选项很重要）的最优相关性模型与书店（作者和系列排名更高）不同。是否应给每个商家独立的相关性配置，还是使用带商家可写加权信号的共享模型？</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Per-merchant relevance config</span><span class="zh">方案 A · 每商家独立相关性配置</span></div>
+          <p><span class="en">Each shop has its own field weights, boost functions, and possibly its own ML ranking model trained on its query/click data.</span><span class="zh">每个店铺有自己的字段权重、加权函数，可能还有基于其查询/点击数据训练的独立 ML 排序模型。</span></p>
+          <p><span class="en"><strong>+</strong> Maximum relevance quality — a vertically specialized catalog can surface the signals that matter most to its buyers.</span><span class="zh"><strong>+</strong> 最高相关性质量——垂直专业目录能够突出对其买家最重要的信号。</span></p>
+          <p><span class="en"><strong>−</strong> Configuration explosion at millions of merchants; ML models need enough query volume to train (useless for small shops); operational complexity of storing and applying per-tenant search configs at query time.</span><span class="zh"><strong>−</strong> 在数百万商家规模下配置爆炸；ML 模型需要足够的查询量才能训练（对小店铺无用）；在查询时存储和应用每租户搜索配置的运维复杂度高。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Global BM25 + per-merchant <code>boost_score</code></span><span class="zh">方案 B · 全局 BM25 + 每商家可写 <code>boost_score</code></span></div>
+          <p><span class="en">Base ranking uses a single global BM25 configuration. Merchants can inject additive boosts on individual products via a <code>boost_score</code> field in the index document, allowing pinning and demoting without touching the ranking model itself.</span><span class="zh">基础排序使用单一全局 BM25 配置。商家可通过索引文档中的 <code>boost_score</code> 字段为单个商品注入加法加权，无需修改排序模型本身即可置顶和降权。</span></p>
+          <p><span class="en"><strong>+</strong> Single search config to tune and monitor; boost fields are just document data, so merchants can update them via the admin UI without any indexer changes; works well for 99% of shops.</span><span class="zh"><strong>+</strong> 单一搜索配置便于调优和监控；加权字段只是文档数据，商家可通过管理界面更新，无需任何 Indexer 变更；适用于 99% 的店铺。</span></p>
+          <p><span class="en"><strong>−</strong> Niche verticals (e.g., a shop selling musical scores where opus number is critical) may see suboptimal relevance; cannot surface domain-specific signals without custom field weights.</span><span class="zh"><strong>−</strong> 垂直细分领域（如乐谱店，作品编号至关重要）可能看到次优的相关性；没有自定义字段权重无法突出领域特定信号。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en"><strong>Start with global BM25 + merchant-writable boosts.</strong> The boost field already covers the most impactful merchant customization (pinning heroes, demoting clearance). Offer full per-merchant relevance config as a premium feature gated behind catalog size or plan tier — it is operational complexity that only whale merchants with dedicated teams can actually leverage.</span><span class="zh"><strong>从全局 BM25 + 商家可写加权开始。</strong>加权字段已覆盖最有影响力的商家自定义（置顶主推商品、降权清仓商品）。将完整的每商家相关性配置作为高级功能，按目录规模或计划级别设门槛——这是只有拥有专属团队的巨型商家才能真正利用的运维复杂度。</span></p>
+      </div>
+
+      <h3><span class="en">⑥ Reindex strategy — in-place mapping update vs blue/green alias swap</span><span class="zh">⑥ 重建索引策略 —— 原地映射更新 vs 蓝绿别名切换</span></h3>
+      <p><span class="en"><strong>The tension:</strong> mapping changes (new field, changed analyzer, new scoring field) require reindexing. Do you update the live index in place, or build a new index alongside the old one and flip traffic over atomically?</span><span class="zh"><strong>矛盾点：</strong>映射变更（新字段、修改分析器、新评分字段）需要重建索引。是原地更新线上索引，还是在旧索引旁构建新索引并原子切换流量？</span></p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · In-place mapping update</span><span class="zh">方案 A · 原地映射更新</span></div>
+          <p><span class="en">PUT a new mapping onto the live index, then run <code>_update_by_query</code> or the reindex API against the same index.</span><span class="zh">对线上索引 PUT 新映射，然后对同一索引运行 <code>_update_by_query</code> 或 reindex API。</span></p>
+          <p><span class="en"><strong>+</strong> Simpler — one index, no alias management, no dual-write window.</span><span class="zh"><strong>+</strong> 更简单——单一索引，无别名管理，无双写窗口。</span></p>
+          <p><span class="en"><strong>−</strong> Elasticsearch may reject incoming documents that do not match the new mapping until all existing documents are updated — creating a silent data loss window; the reindex operation competes with live query traffic for cluster resources, causing latency spikes; impossible to validate the new mapping against a shadow index before exposing it to buyers.</span><span class="zh"><strong>−</strong> Elasticsearch 可能在所有现有文档更新完成之前拒绝不符合新映射的入站文档——造成静默数据丢失窗口；重建索引操作与线上查询流量竞争集群资源，引发延迟尖峰；无法在向买家暴露新映射之前对影子索引进行验证。</span></p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Blue/green alias swap</span><span class="zh">方案 B · 蓝绿别名切换</span></div>
+          <p><span class="en">Create a new versioned index (<code>products_v4</code>), reindex data from the live index into it, enable dual-write in the Indexer during the transition, validate quality, then atomically swap the <code>products</code> alias to point to <code>products_v4</code>.</span><span class="zh">创建新的带版本号索引（<code>products_v4</code>），从线上索引将数据 reindex 到其中，过渡期间在 Indexer 中启用双写，验证质量后原子性地将 <code>products</code> 别名指向 <code>products_v4</code>。</span></p>
+          <p><span class="en"><strong>+</strong> The alias flip is instantaneous and atomic — zero downtime; the new mapping is fully validated before any buyer sees it; rollback is trivial (flip alias back); the old index absorbs all reads until the swap.</span><span class="zh"><strong>+</strong> 别名切换瞬间完成且是原子操作——零停机；新映射在任何买家看到之前已完全验证；回滚简单（将别名切回）；切换前所有读取由旧索引承担。</span></p>
+          <p><span class="en"><strong>−</strong> Temporarily doubles cluster storage; requires dual-write logic in the Indexer (a feature-flagged code path); alias management adds a small layer of indirection to routing.</span><span class="zh"><strong>−</strong> 临时使集群存储翻倍；需要 Indexer 中的双写逻辑（功能开关控制的代码路径）；别名管理在路由上增加了一小层间接性。</span></p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p><span class="en"><strong>Always use the alias swap — never reindex in place under live traffic.</strong> The risk of silent data loss during an in-place reindex is real and hard to detect until a buyer notices missing products. The alias pattern is standard practice in every production Elasticsearch deployment. The short period of doubled storage cost is a small price for zero-downtime, zero-risk mapping changes.</span><span class="zh"><strong>始终使用别名切换——绝不在线上流量下原地重建索引。</strong>原地重建过程中静默数据丢失的风险是真实存在的，且难以在买家发现商品缺失之前检测到。别名模式是每个生产 Elasticsearch 部署的标准实践。短暂的存储成本翻倍，换取零停机、零风险的映射变更，代价微小。</span></p>
+      </div>
+
     </section>
 
     <!-- 8 FOLLOW-UPS -->

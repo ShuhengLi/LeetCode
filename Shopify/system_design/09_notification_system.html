@@ -872,6 +872,41 @@ body.zh .zh{display:revert;}
 <span class="c">-- 3. Redis dedupe prevents the same dedupeKey from being sent twice</span>
 <span class="c">-- 4. Result: at most one provider API call per (dedupeKey, window)</span>
 <span class="c">-- 5. Delivery to device tracked async via provider webhook → status update</span></code></pre>
+
+      <h3><span class="en">⑦ The provider failover state machine</span><span class="zh">⑦ 供应商故障转移状态机</span></h3>
+      <p class="en">Each provider adapter maintains a per-provider circuit breaker whose state is stored in Redis (key: <code>provider:{id}:circuit</code>). The breaker has three states and transitions driven by both consecutive error counts and a sliding health score, so a provider that is slow-but-not-failing can also be routed away from proactively.</p>
+      <p class="zh">每个供应商适配器维护一个熔断器，其状态存储在 Redis 中（键：<code>provider:{id}:circuit</code>）。熔断器有三个状态，由连续错误计数和滑动健康分数共同驱动状态转换——因此响应慢但未报错的供应商也可以被主动路由绕开。</p>
+
+      <pre><code><span class="c">-- Circuit-breaker state machine (per provider, per channel)</span>
+
+<span class="k">CLOSED</span> <span class="c">-- normal operation; all sends go to the primary provider</span>
+  <span class="n">health_score</span> = <span class="n">1.0</span>  <span class="c">-- decays on errors, recovers on successes (EWMA)</span>
+  <span class="c">-- transitions to OPEN when:</span>
+  <span class="c">--   consecutive_errors >= THRESHOLD (e.g. 5)  OR</span>
+  <span class="c">--   health_score < FLOOR (e.g. 0.6, ~40% error rate over window)</span>
+
+<span class="k">OPEN</span> <span class="c">-- tripped; primary is unreachable or unhealthy</span>
+  <span class="c">-- all sends routed immediately to secondary (SES→Mailgun, Twilio→SNS)</span>
+  <span class="c">-- no calls to primary; Redis key carries open_until timestamp</span>
+  <span class="c">-- transitions to HALF_OPEN when: now() >= open_until (cool-down elapsed)</span>
+
+<span class="k">HALF_OPEN</span> <span class="c">-- probe state; testing whether primary has recovered</span>
+  <span class="c">-- exactly ONE probe request allowed through to primary</span>
+  <span class="c">--   probe success  → CLOSED (reset consecutive_errors, health_score = 1.0)</span>
+  <span class="c">--   probe failure  → OPEN again (cool-down doubles: exponential back-off)</span>
+  <span class="c">-- remaining sends route to secondary while probe is in-flight</span></code></pre>
+
+      <p class="en">Health-based routing adds a second dimension on top of binary open/close. Each outbound call records its outcome in a Redis sliding window (<code>provider:{id}:errs</code> via <code>INCR</code> + <code>EX</code>, or a time-bucketed counter). The health score is an exponentially-weighted moving average (EWMA) of the success rate; the circuit opens not only on hard consecutive failures but also when the health score drops below a configured floor — catching slow-burn degradation that retries alone would mask.</p>
+      <p class="zh">基于健康分数的路由在简单的开/关二元状态之上增加了第二个维度。每次出站调用将结果记录在 Redis 滑动窗口中（通过 <code>INCR</code> + <code>EX</code> 或时间桶计数器实现 <code>provider:{id}:errs</code>）。健康分数是成功率的指数加权移动平均（EWMA）；熔断器不仅在连续硬性失败时触发，也在健康分数降至配置阈值以下时触发——从而能捕获单靠重试会掩盖的缓慢降级现象。</p>
+
+      <p class="en">Delivery status is reconciled asynchronously via provider webhooks. After a failover, some messages were sent via the secondary; their delivery receipts, bounces, and spam complaints arrive on the <code>POST /provider/webhook</code> endpoint referencing the secondary's provider message ID. The Status Writer matches these to the notification record using the <code>provider_msg_id</code> column and updates the status. Crucially, bounced or complained addresses update the suppression list regardless of which provider sent the message — the suppression list is provider-agnostic.</p>
+      <p class="zh">投递状态通过供应商 webhook 异步核对。故障转移后，部分消息经由备用供应商发送；其投递回执、退信和垃圾邮件投诉通过 <code>POST /provider/webhook</code> 端点到达，引用的是备用供应商的消息 ID。Status Writer 使用 <code>provider_msg_id</code> 列将这些回调与通知记录匹配，并更新状态。关键点：退信或投诉地址无论经由哪个供应商发送，都会更新抑制名单——抑制名单与供应商无关。</p>
+
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">The queue buffers during failover — no notification is lost, only delayed</span><span class="zh">队列在故障转移期间缓冲——通知不会丢失，只会延迟</span></span>
+        <p class="en">When the circuit opens, the worker immediately reroutes to the secondary — but the Kafka message is not dropped. Any notification that was mid-flight at the moment of tripping is retried via the secondary on the next poll cycle. Messages that arrive while the circuit is OPEN are sent directly to the secondary. The entire delay is bounded by Kafka's retention window (configured to 7 days for this service) and the secondary provider's acceptance rate. A message is only at risk of expiry if <em>both</em> the primary and secondary are simultaneously unavailable for the full retention window — an extreme scenario that should trigger a P0 incident response, not silent data loss.</p>
+        <p class="zh">当熔断器打开时，Worker 立即将流量重路由到备用供应商——但 Kafka 消息不会被丢弃。熔断触发瞬间正在处理中的任何通知，在下一个轮询周期通过备用供应商重试。熔断器处于 OPEN 状态期间到达的消息直接发往备用供应商。所有延迟都受限于 Kafka 的保留窗口（该服务配置为 7 天）和备用供应商的接受速率。消息面临过期风险，仅当主备供应商在整个保留窗口内<em>同时</em>不可用——这是极端场景，应触发 P0 事故响应，而非静默数据丢失。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -888,6 +923,183 @@ body.zh .zh{display:revert;}
           <tr><td><span class="en">Ordering per recipient</span><span class="zh">接收者维度的消息顺序</span></td><td><span class="en">Partition by recipient+order_id (strict order, reduced parallelism)</span><span class="zh">按 recipient+order_id 分区（严格顺序，并行度降低）</span></td><td><span class="en">No partition key (max throughput, arbitrary order)</span><span class="zh">不设分区键（最大吞吐，顺序不保证）</span></td><td><span class="en"><strong>Partition by order</strong> for transactional; unkeyed for marketing where order is irrelevant — hybrid approach by queue type</span><span class="zh">事务性通知<strong>按订单分区</strong>；营销通知顺序无关则不设键——按队列类型采用混合方案</span></td></tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Delivery guarantee — at-least-once + dedupe vs exactly-once (2PC)</span><span class="zh">① 投递保证——至少一次 + 去重 vs 精确一次（2PC）</span></h3>
+      <p class="en"><strong>The tension:</strong> how strongly do you guarantee that a notification is sent exactly once? The stronger the guarantee, the heavier the machinery required.</p>
+      <p class="zh"><strong>矛盾点：</strong>你对"通知恰好发送一次"的保证强度有多高？保证越强，所需的机制越重。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · At-least-once + Redis dedupe</span><span class="zh">方案 A · 至少一次 + Redis 去重</span></div>
+          <p class="en">The queue delivers at-least-once; the Notification Service does an atomic Redis <code>SET NX EX</code> on the <code>dedupeKey</code> before persisting. A duplicate event is silently dropped and a 200 is returned.</p>
+          <p class="zh">队列提供至少一次语义；通知服务在持久化前对 <code>dedupeKey</code> 做原子 Redis <code>SET NX EX</code>。重复事件被静默丢弃并返回 200。</p>
+          <p class="en"><strong>+</strong> Horizontally scalable — Redis NX is a single atomic op; no cross-service coordination; workers are completely stateless; dedupe window (e.g. 24 h) covers virtually all retry storms without any distributed transaction.</p>
+          <p class="zh"><strong>+</strong> 水平可扩展——Redis NX 是单个原子操作；无需跨服务协调；Worker 完全无状态；去重窗口（如 24 小时）无需任何分布式事务即可覆盖几乎所有重试风暴。</p>
+          <p class="en"><strong>−</strong> Not strictly durable: if the service crashes after setting the Redis key but before writing the DB record, the notification is silently lost (an orphan key). Needs a background reconciler to detect and replay these gaps.</p>
+          <p class="zh"><strong>−</strong> 不是严格持久：若服务在设置 Redis 键后、写入 DB 记录前崩溃，通知会静默丢失（孤儿键）。需要后台协调任务来检测并重放这些空缺。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Exactly-once via 2PC</span><span class="zh">方案 B · 通过 2PC 实现精确一次</span></div>
+          <p class="en">Wrap the DB write and queue publish in a two-phase commit (or outbox pattern): the notification row and the outbox event are written atomically; a relay polls and publishes; acks confirm end-to-end.</p>
+          <p class="zh">将 DB 写入和队列发布包装在两阶段提交中（或发件箱模式）：通知行和发件箱事件原子写入；中继轮询并发布；确认端到端完成。</p>
+          <p class="en"><strong>+</strong> Formally correct — no orphan keys; the DB and queue are always in sync; easier to reason about at audit time.</p>
+          <p class="zh"><strong>+</strong> 形式上正确——无孤儿键；DB 和队列始终同步；审计时更易推理。</p>
+          <p class="en"><strong>−</strong> Kills throughput — distributed transactions add latency and serialization; the outbox relay adds an extra hop per notification; throughput collapses under the 30k/s BFCM load; adds operational complexity (distributed lock, relay lag monitoring).</p>
+          <p class="zh"><strong>−</strong> 严重降低吞吐——分布式事务增加延迟和串行化；发件箱中继为每条通知增加一跳；在 BFCM 3 万/秒的负载下吞吐崩溃；增加运维复杂度（分布式锁、中继延迟监控）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>At-least-once + dedupe is the right default</strong> for notification systems at scale. The Redis NX dedupe gives effectively-once semantics without 2PC overhead, and a background reconciler patches the rare orphan-key gap. Reserve exactly-once (outbox pattern) for financial ledger writes where a duplicate or missing event has monetary consequences — not for notifications where a brief gap is acceptable.</p>
+        <p class="zh"><strong>至少一次 + 去重是规模化通知系统的正确默认选择。</strong>Redis NX 去重在无需 2PC 开销的情况下提供实际上的恰好一次语义，后台协调任务修补极少出现的孤儿键缺口。将精确一次（发件箱模式）留给金融账本写入——那里重复或缺失事件有货币影响——而非通知系统（短暂空缺可接受）。</p>
+      </div>
+
+      <h3><span class="en">② Send path — synchronous vs async via queue</span><span class="zh">② 发送路径——同步 vs 通过队列异步</span></h3>
+      <p class="en"><strong>The tension:</strong> should the caller block while the notification is dispatched to the provider, or should it return immediately and let a background worker do the send?</p>
+      <p class="zh"><strong>矛盾点：</strong>调用方是否应阻塞等待通知被分发至供应商，还是应立即返回并由后台 Worker 执行发送？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Synchronous send</span><span class="zh">方案 A · 同步发送</span></div>
+          <p class="en">The request handler calls the provider API inline; the caller's latency is coupled to the provider's response time and error behavior.</p>
+          <p class="zh">请求处理器直接内联调用供应商 API；调用方的延迟与供应商的响应时间和错误行为强耦合。</p>
+          <p class="en"><strong>+</strong> Simple to reason about — success means the provider accepted the message; easy to surface provider errors synchronously to the caller.</p>
+          <p class="zh"><strong>+</strong> 推理简单——成功即代表供应商已接受消息；易于将供应商错误同步返回给调用方。</p>
+          <p class="en"><strong>−</strong> Provider latency (SES p99 ≈ 150 ms, Twilio p99 ≈ 300 ms) is added to every <code>POST /notifications</code> call. A provider outage or rate-limit pause blocks callers and blocks the hot-path (order checkout). At BFCM, 30k/s of provider calls cannot be handled synchronously — the thread pool saturates in seconds.</p>
+          <p class="zh"><strong>−</strong> 供应商延迟（SES p99 ≈ 150 ms，Twilio p99 ≈ 300 ms）叠加到每次 <code>POST /notifications</code> 调用上。供应商故障或速率限制暂停会阻塞调用方和热路径（订单结账）。BFCM 期间 30k/s 的供应商调用无法同步处理——线程池数秒内就会饱和。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Async via Kafka queue</span><span class="zh">方案 B · 通过 Kafka 队列异步</span></div>
+          <p class="en">The Notification Service validates, dedupes, and enqueues the notification; per-channel workers pull from Kafka and call providers independently.</p>
+          <p class="zh">通知服务验证、去重并将通知入队；各渠道 Worker 从 Kafka 拉取并独立调用供应商。</p>
+          <p class="en"><strong>+</strong> <strong>Decouples caller from provider</strong> — the order service's p99 is not affected by SES latency. The queue absorbs the BFCM burst; workers drain at provider rate. Provider outages cause queue lag, not caller errors. Retry and circuit-breaker logic lives in workers, not scattered across callers.</p>
+          <p class="zh"><strong>+</strong> <strong>将调用方与供应商解耦</strong>——订单服务的 p99 不受 SES 延迟影响。队列吸收 BFCM 峰值；Worker 以供应商速率平稳输出。供应商故障导致队列积压，而非调用方错误。重试和熔断逻辑集中在 Worker 中，而非分散在各调用方。</p>
+          <p class="en"><strong>−</strong> Caller gets QUEUED, not SENT — the notification may still fail after acknowledgment; caller must poll or webhook for delivery confirmation. More moving parts (Kafka, worker fleet, consumer-group lag monitoring).</p>
+          <p class="zh"><strong>−</strong> 调用方获得的是 QUEUED，而非 SENT——通知在被确认后仍可能失败；调用方必须轮询或通过 webhook 确认投递。更多活动部件（Kafka、Worker 集群、消费者组积压监控）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Async always, for any notification system with non-trivial volume.</strong> Provider latency and failure modes must not bleed into the order checkout path. The queue also lets you add retries, priority lanes, and dead-letter handling without changing a single producer. Synchronous send is only acceptable for very low-volume internal tooling where simplicity outweighs everything.</p>
+        <p class="zh"><strong>对任何有一定规模的通知系统，始终使用异步。</strong>供应商延迟和故障模式绝不能渗入订单结账路径。队列还允许在不改变任何生产者的情况下添加重试、优先级通道和死信处理。同步发送仅适用于量极小的内部工具，且只有在简单性压倒一切时才合理。</p>
+      </div>
+
+      <h3><span class="en">③ Provider strategy — single provider with retry vs multi-provider failover</span><span class="zh">③ 供应商策略——单供应商加重试 vs 多供应商故障转移</span></h3>
+      <p class="en"><strong>The tension:</strong> how much availability do you need from your external sending provider, and what are you willing to pay in cost and complexity to get it?</p>
+      <p class="zh"><strong>矛盾点：</strong>你对外部发送供应商的可用性需求有多高，愿意为此在成本和复杂度上付出多少？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Single provider with retry</span><span class="zh">方案 A · 单供应商加重试</span></div>
+          <p class="en">One provider per channel (e.g., SES for email, Twilio for SMS); failed sends retry up to N times with exponential back-off.</p>
+          <p class="zh">每个渠道一个供应商（如邮件用 SES，SMS 用 Twilio）；失败发送以指数退避重试最多 N 次。</p>
+          <p class="en"><strong>+</strong> Operationally simple — one API contract, one credential, one dashboard; retries handle transient blips.</p>
+          <p class="zh"><strong>+</strong> 运维简单——一个 API 合同、一套凭证、一个看板；重试可处理瞬时故障。</p>
+          <p class="en"><strong>−</strong> A sustained provider outage (SES has had multi-hour incidents) means <strong>zero notifications delivered</strong> until it recovers. Retries pile up in the dead-letter queue; some age out. There is no way to self-heal without a second provider.</p>
+          <p class="zh"><strong>−</strong> 供应商持续故障（SES 曾有过数小时事故）意味着<strong>零通知送达</strong>，直到其恢复。重试积压在死信队列中，部分消息超时。没有第二供应商，系统无法自愈。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Multi-provider with circuit-breaker failover</span><span class="zh">方案 B · 多供应商加熔断器故障转移</span></div>
+          <p class="en">Primary + secondary per channel (SES→Mailgun for email, Twilio→SNS for SMS, FCM/APNs are already multi-provider for push). A circuit breaker trips on consecutive failures and routes to the secondary.</p>
+          <p class="zh">每个渠道主备各一（邮件 SES→Mailgun，SMS Twilio→SNS，推送 FCM/APNs 本身已是多供应商）。熔断器在连续失败后触发，将流量路由至备用供应商。</p>
+          <p class="en"><strong>+</strong> A provider outage is a <strong>degradation, not an outage</strong> — the secondary takes over within seconds (the circuit-breaker cool-down). Notifications continue during the failover; the queue buffers the gap. Protects sender reputation: if SES is soft-failing (timeouts, rate errors), the circuit opens before reputation damage accumulates.</p>
+          <p class="zh"><strong>+</strong> 供应商故障是<strong>降级，而非全面中断</strong>——备用供应商在数秒内（熔断器冷却期内）接管。通知在故障转移期间持续发送；队列缓冲过渡期。保护发件人信誉：若 SES 软故障（超时、速率错误），熔断器在信誉损害积累前就已打开。</p>
+          <p class="en"><strong>−</strong> Two provider contracts to manage (cost, credential rotation, API differences). Circuit-breaker state must be shared across workers (via Redis). Secondary may have different deliverability characteristics; warm-up if using a cold IP.</p>
+          <p class="zh"><strong>−</strong> 两套供应商合同需要管理（成本、凭证轮换、API 差异）。熔断器状态必须在 Worker 间共享（通过 Redis）。备用供应商可能有不同的投递特性；若使用冷 IP 需要预热。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Multi-provider is the right default at any meaningful scale.</strong> Provider incidents are real and unpredictable — SES, Twilio, and FCM/APNs have all had production outages. The circuit-breaker + adapter pattern is the engineering investment; the second provider contract is the business investment. Use single provider only if volume is very low and manual failover (update an env var, redeploy) is acceptable within your SLA. At BFCM scale, "manual failover" means tens of millions of missed notifications.</p>
+        <p class="zh"><strong>在任何有意义的规模下，多供应商是正确的默认选择。</strong>供应商事故是真实且不可预测的——SES、Twilio 和 FCM/APNs 均有过生产故障。熔断器 + 适配器模式是工程投入；第二供应商合同是业务投入。只有在流量极低且手动故障转移（更新环境变量、重新部署）可接受时，才考虑单供应商。在 BFCM 规模下，"手动故障转移"意味着数千万条丢失的通知。</p>
+      </div>
+
+      <h3><span class="en">④ Queue topology — single queue vs priority lanes</span><span class="zh">④ 队列拓扑——单一队列 vs 优先级通道</span></h3>
+      <p class="en"><strong>The tension:</strong> how do you prevent a low-priority marketing blast from starving the high-priority transactional notifications that buyers are actively waiting for?</p>
+      <p class="zh"><strong>矛盾点：</strong>如何防止低优先级营销群发"饿死"买家正在等待的高优先级事务性通知？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Single shared queue</span><span class="zh">方案 A · 单一共享队列</span></div>
+          <p class="en">All notifications — transactional and marketing — go onto one Kafka topic; workers consume in arrival order.</p>
+          <p class="zh">所有通知——事务性和营销——都进入同一个 Kafka topic；Worker 按到达顺序消费。</p>
+          <p class="en"><strong>+</strong> Simplest topology — one topic, one consumer group, one set of offset metrics to watch.</p>
+          <p class="zh"><strong>+</strong> 拓扑最简单——一个 topic、一个消费者组、一组 offset 指标。</p>
+          <p class="en"><strong>−</strong> A marketing campaign blasting 100 M messages floods the topic; transactional confirmations queue behind it and arrive minutes late. There is no mechanism to skip ahead even though the order confirmation is infinitely more urgent than the promotional code.</p>
+          <p class="zh"><strong>−</strong> 一次发送 1 亿条消息的营销活动会淹没该 topic；事务性确认排在其后，延迟数分钟才能到达。即使订单确认远比促销码紧急，也没有机制让其插队。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Separate topics per type and channel</span><span class="zh">方案 B · 按类型和渠道分开 topic</span></div>
+          <p class="en">Two or more Kafka topics: <code>notifications.transactional</code> (high priority, more consumers) and <code>notifications.marketing</code> (lower priority, throttled). Optional: per-channel topics for independent rate-limit tuning.</p>
+          <p class="zh">两个或更多 Kafka topic：<code>notifications.transactional</code>（高优先级，更多消费者）和 <code>notifications.marketing</code>（低优先级，限速）。可选：每渠道独立 topic 以独立调整速率限制。</p>
+          <p class="en"><strong>+</strong> Transactional consumers are never starved — they have dedicated consumer group capacity and their own provider rate-limit pool. Marketing throughput can be throttled at the consumer level without touching transactional. Each lane can be independently scaled and monitored.</p>
+          <p class="zh"><strong>+</strong> 事务性消费者永不被饿死——它们拥有专属消费者组容量和独立供应商速率限制池。营销吞吐可在消费者层面限速，而不影响事务性通知。每条通道可独立扩缩和监控。</p>
+          <p class="en"><strong>−</strong> More Kafka topics to manage; producers must classify notifications before enqueue; consumer group configuration becomes more complex. Small operational overhead compared to the latency protection gained.</p>
+          <p class="zh"><strong>−</strong> 需要管理更多 Kafka topic；生产者必须在入队前对通知分类；消费者组配置变得更复杂。与所获得的延迟保护相比，运维开销很小。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Priority lanes from day one.</strong> The cost is minimal (a second Kafka topic and consumer group) but the protection is large. An order confirmation delayed by five minutes due to a marketing blast is a support ticket, a potential chargeback query, and an erosion of buyer trust. Always separate transactional from marketing at the queue layer; the per-channel split is optional and driven by rate-limit tuning needs.</p>
+        <p class="zh"><strong>从第一天起就使用优先级通道。</strong>成本极小（第二个 Kafka topic 和消费者组），但保护作用巨大。因营销群发而延迟五分钟的订单确认会产生工单、潜在的退款争议和买家信任侵蚀。始终在队列层将事务性通知与营销通知分开；渠道级别的分割是可选的，由速率限制调整需求驱动。</p>
+      </div>
+
+      <h3><span class="en">⑤ Template engine — build in-house vs buy</span><span class="zh">⑤ 模板引擎——自研 vs 购买</span></h3>
+      <p class="en"><strong>The tension:</strong> building a full templating and localization stack gives you control and multi-channel parity; buying a managed solution (SendGrid dynamic templates, Braze) gets you there faster but creates provider coupling.</p>
+      <p class="zh"><strong>矛盾点：</strong>构建完整的模板与本地化栈能给你控制权和多渠道一致性；购买托管方案（SendGrid 动态模板、Braze）能更快落地，但会产生供应商耦合。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Build in-house</span><span class="zh">方案 A · 自研</span></div>
+          <p class="en">Own the Template Service: store templates per <code>(channel, locale, version)</code> in a DB; render by injecting <code>render_data</code> JSON; support merchant overrides; version-pin at enqueue.</p>
+          <p class="zh">自建模板服务：按 <code>(channel, locale, version)</code> 在 DB 中存储模板；通过注入 <code>render_data</code> JSON 渲染；支持商户覆盖；在入队时固定版本。</p>
+          <p class="en"><strong>+</strong> Full control of versioning, merchant customization, multi-channel rendering parity (same template logic for email/SMS/push), GDPR data residency, and locale fallback chain. No per-message billing for rendering.</p>
+          <p class="zh"><strong>+</strong> 完全控制版本管理、商户定制、多渠道渲染一致性（邮件/SMS/推送使用相同模板逻辑）、GDPR 数据驻留和语言区域兜底链。渲染无按消息计费。</p>
+          <p class="en"><strong>−</strong> Engineering cost to build, test, and operate a production template system with localization, versioning, and merchant overrides. Takes time you could spend on core platform features.</p>
+          <p class="zh"><strong>−</strong> 构建、测试和运营具备本地化、版本控制和商户覆盖的生产级模板系统需要工程成本。会占用本可用于核心平台功能的时间。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Buy (SendGrid, Braze, etc.)</span><span class="zh">方案 B · 购买（SendGrid、Braze 等）</span></div>
+          <p class="en">Use the email provider's dynamic template engine (e.g., SendGrid's Handlebars templates); marketing blasts managed in Braze; localization handled by the provider's tools.</p>
+          <p class="zh">使用邮件供应商的动态模板引擎（如 SendGrid 的 Handlebars 模板）；营销群发由 Braze 管理；本地化由供应商工具处理。</p>
+          <p class="en"><strong>+</strong> Fast time to market; no infrastructure to own; WYSIWYG editors for non-technical users (merchant success teams).</p>
+          <p class="zh"><strong>+</strong> 快速上市；无需自己维护基础设施；为非技术用户（商户成功团队）提供所见即所得编辑器。</p>
+          <p class="en"><strong>−</strong> Tight coupling to the provider — switching providers requires re-templating everything. Template logic is split across providers if you use multiple channels. Per-message rendering fees at scale. Limited multi-channel parity. GDPR data residency concerns if <code>render_data</code> (with PII) is sent to an external service.</p>
+          <p class="zh"><strong>−</strong> 与供应商紧密耦合——切换供应商需要重新制作所有模板。若使用多个渠道，模板逻辑分散在不同供应商中。规模化时有按消息渲染计费。多渠道一致性受限。若 <code>render_data</code>（含 PII）被发送至外部服务，存在 GDPR 数据驻留问题。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Buy at early scale; build when merchant customization, versioning, and multi-channel parity become blockers.</strong> For a startup or an early-stage platform, paying for SendGrid or Braze templates unlocks speed. For Shopify's scale — multi-tenant, multi-channel, multi-locale, merchant-customizable — the in-house template service is justified: the coupling risk, PII exposure, and per-message cost become too high, and the team needs control over GDPR-compliant data handling.</p>
+        <p class="zh"><strong>早期规模时购买；当商户定制、版本管理和多渠道一致性成为瓶颈时再自研。</strong>对于初创公司或早期平台，为 SendGrid 或 Braze 模板付费可解锁速度。在 Shopify 的规模下——多租户、多渠道、多语言区域、商户可定制——自建模板服务是合理的：耦合风险、PII 暴露和按消息计费成本过高，团队需要控制符合 GDPR 的数据处理方式。</p>
+      </div>
+
+      <h3><span class="en">⑥ Ordering per recipient — partition by order vs no partition key</span><span class="zh">⑥ 接收者维度的消息顺序——按订单分区 vs 不设分区键</span></h3>
+      <p class="en"><strong>The tension:</strong> strict ordering guarantees require serializing work onto a single partition; maximum throughput wants all partitions fully parallel. You must choose per queue type.</p>
+      <p class="zh"><strong>矛盾点：</strong>严格顺序保证需要将工作串行化到单一分区；最大吞吐要求所有分区全并行。必须按队列类型分别选择。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Partition by recipient + order_id</span><span class="zh">方案 A · 按 recipient + order_id 分区</span></div>
+          <p class="en">All events for a given order land on the same Kafka partition; one worker instance consumes that partition in offset order, guaranteeing "Confirmed" before "Shipped" for any single order.</p>
+          <p class="zh">同一订单的所有事件落在同一 Kafka 分区；一个 Worker 实例按 offset 顺序消费该分区，保证任意单一订单的"已确认"先于"已发货"。</p>
+          <p class="en"><strong>+</strong> Correct per-order notification ordering is guaranteed; easy to reason about downstream (the buyer cannot get a "shipped" email without a prior "confirmed").</p>
+          <p class="zh"><strong>+</strong> 保证每订单通知顺序正确；下游推理容易（买家不会在收到"已确认"前就收到"已发货"邮件）。</p>
+          <p class="en"><strong>−</strong> One hot order (e.g., a large enterprise buyer placing hundreds of line items) can slow one partition. Adding partitions improves throughput but requires re-partitioning. Partition count caps max parallelism.</p>
+          <p class="zh"><strong>−</strong> 单一热点订单（如大型企业买家下几百个行项目的订单）可能拖慢一个分区。增加分区数可提升吞吐，但需要重新分区。分区数上限制约最大并行度。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · No partition key (max throughput)</span><span class="zh">方案 B · 不设分区键（最大吞吐）</span></div>
+          <p class="en">Messages are assigned round-robin across partitions; workers are fully parallel; maximum horizontal throughput.</p>
+          <p class="zh">消息轮询分配到各分区；Worker 全并行；最大水平吞吐。</p>
+          <p class="en"><strong>+</strong> Maximum throughput; all partitions fully saturated; simpler consumer logic with no per-key affinity.</p>
+          <p class="zh"><strong>+</strong> 最大吞吐；所有分区充分利用；消费者逻辑更简单，无需每键亲和性。</p>
+          <p class="en"><strong>−</strong> A "Shipped" notification can be processed and sent before its "Confirmed" counterpart — a genuinely confusing buyer experience. Requires the consumer to buffer out-of-order events, adding per-worker state and complexity.</p>
+          <p class="zh"><strong>−</strong> "已发货"通知可能在其"已确认"通知之前被处理并发送——这对买家来说是真正令人困惑的体验。需要消费者缓冲乱序事件，增加 Worker 的状态和复杂度。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Hybrid by queue type: partition by order_id for the transactional queue; no partition key for the marketing queue.</strong> Transactional notifications carry a strict causal chain (confirmed → shipped → delivered) that is visible to the buyer and governs their support behavior. Order is irrelevant for marketing (a promotional code arriving slightly before or after a sale announcement is fine). Apply the stricter discipline only where it is actually required — don't let correctness guarantees for transactional traffic penalize marketing throughput.</p>
+        <p class="zh"><strong>按队列类型混合使用：事务性队列按 order_id 分区；营销队列不设分区键。</strong>事务性通知携带买家可见的严格因果链（已确认 → 已发货 → 已送达），并影响其工单行为。营销通知中顺序无关紧要（促销码比促销公告稍早或稍晚到达都无妨）。只在真正需要的地方施加更严格的约束——不要让事务性流量的正确性保证惩罚营销吞吐。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

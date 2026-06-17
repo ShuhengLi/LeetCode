@@ -915,6 +915,68 @@ body.zh .zh{display:revert;}
         <li class="en"><strong>Whale shops</strong>: a handful of large shops (e.g., Gymshark, Allbirds) generate orders of magnitude more events than the average. Route whale shops to dedicated Kafka partitions and dedicated Flink parallelism slots to prevent them from blocking other shops' aggregation windows.</li>
         <li class="zh"><strong>巨鲸店铺</strong>：少数大型店铺（如 Gymshark、Allbirds）产生的事件量比平均水平高出几个数量级。将巨鲸店铺路由至专用 Kafka 分区和专用 Flink 并行槽，防止它们阻塞其他店铺的聚合窗口。</li>
       </ul>
+
+      <h3><span class="en">⑦ Exactly-once for revenue + late-data handling end-to-end</span><span class="zh">⑦ 收入的精确一次语义 + 端到端迟到数据处理</span></h3>
+      <p class="en">Revenue is the single metric where a wrong number causes real financial harm — a merchant over-orders stock or over-spends on ads based on a double-counted figure. Getting it right requires reasoning about two separate problems that are easy to conflate: <strong>exactly-once state</strong> (Flink does not double-count internally on restart) and <strong>exactly-once write</strong> (the OLAP sink does not double-insert the same rollup row). Only when both hold do you have end-to-end exactly-once.</p>
+      <p class="zh">收入是唯一一个数字出错会造成真实财务损失的指标——商家可能基于重复计数的数字超额备货或过度投放广告。做对它需要区分两个容易混淆的问题：<strong>精确一次状态</strong>（Flink 在重启时不内部重复计数）和<strong>精确一次写入</strong>（OLAP Sink 不重复插入同一汇总行）。两者同时成立才能实现端到端精确一次。</p>
+
+      <h4><span class="en">Layer 1 — Flink checkpoint/barrier snapshots (exactly-once state)</span><span class="zh">第一层 —— Flink Checkpoint / Barrier 快照（精确一次状态）</span></h4>
+      <p class="en">Flink's checkpoint algorithm is a variant of <strong>Chandy-Lamport</strong> distributed snapshots. Periodically, the JobManager injects lightweight <em>barrier</em> markers into every Kafka partition. These barriers flow through the operator DAG alongside data. When an operator has received a barrier from every upstream input, it atomically flushes its current state (window accumulators, keyed state) to durable object storage (S3/GCS) and acknowledges the checkpoint. Only after all operators acknowledge does the JobManager commit the Kafka consumer offsets as part of the same checkpoint record — a two-phase commit that ties the source offset to the saved operator state.</p>
+      <p class="zh">Flink 的 Checkpoint 算法是 <strong>Chandy-Lamport</strong> 分布式快照的变体。JobManager 定期向每个 Kafka 分区注入轻量级 <em>Barrier</em> 标记。这些 Barrier 随数据流过算子 DAG。当某个算子从每个上游输入都收到 Barrier 后，它将当前状态（窗口累加器、键控状态）原子地刷新到持久化对象存储（S3/GCS），并确认 Checkpoint。所有算子确认后，JobManager 才将 Kafka 消费者偏移量作为同一 Checkpoint 记录的一部分提交——一个将源偏移量与已保存算子状态绑定的两阶段提交。</p>
+      <p class="en">On failure and restart, Flink rewinds to the last successful checkpoint: all operator state is restored, and Kafka offsets are reset to the value saved in that checkpoint. Events between the checkpoint and the crash are re-read from Kafka — they will be re-processed, but because the operator state was rolled back to exactly before those events were processed, no double-count occurs inside Flink.</p>
+      <p class="zh">故障重启时，Flink 回滚到最近一次成功的 Checkpoint：所有算子状态恢复，Kafka 偏移量重置为该 Checkpoint 中保存的值。Checkpoint 到崩溃之间的事件从 Kafka 重新读取——它们将被重新处理，但由于算子状态已回滚到处理这些事件之前的精确位置，Flink 内部不会发生重复计数。</p>
+
+      <h4><span class="en">Layer 2 — idempotent/transactional sink (exactly-once write)</span><span class="zh">第二层 —— 幂等/事务性 Sink（精确一次写入）</span></h4>
+      <p class="en">Checkpoint-based replay guarantees exactly-once state <em>inside</em> Flink, but the rollup rows that were emitted to the OLAP store before the failure are already there. When the job replays and re-emits those rows, the OLAP store must not double-insert them. This is solved by an <strong>idempotent upsert keyed on <code>(shop_id, metric, time_bucket)</code></strong>: a replayed row with the same key simply overwrites the existing row with the same value — a no-op that is safe to repeat any number of times. ClickHouse's <code>ReplacingMergeTree</code> and Pinot's upsert mode both support this pattern. For stricter guarantees, a two-phase-commit (2PC) Flink sink can hold rollup writes in a staging buffer and only make them visible atomically when the checkpoint commits — but the idempotent-upsert approach is simpler and sufficient here.</p>
+      <p class="zh">基于 Checkpoint 的回放保证了 Flink <em>内部</em>的精确一次状态，但故障前已写入 OLAP 存储的汇总行已经存在。当作业回放并重新发出这些行时，OLAP 存储不能重复插入它们。解决方案是<strong>以 <code>(shop_id, metric, time_bucket)</code> 为键的幂等 Upsert</strong>：具有相同键的重放行简单地以相同值覆盖现有行——一个可以安全重复任意次数的空操作。ClickHouse 的 <code>ReplacingMergeTree</code> 和 Pinot 的 Upsert 模式都支持此模式。对于更严格的保证，两阶段提交（2PC）Flink Sink 可以将汇总写入保存在暂存缓冲区中，只在 Checkpoint 提交时原子地使其可见——但幂等 Upsert 方式更简单，在此已足够。</p>
+
+      <h4><span class="en">Late and out-of-order events — watermark, grace period, side output, correction</span><span class="zh">迟到与乱序事件 —— 水印、宽限期、侧输出、修正</span></h4>
+      <p class="en">Mobile apps, offline-first storefronts, and payment webhooks all produce events that arrive after their event-time window has already closed. Flink handles this with a <strong>tumbling-window + watermark + grace-period</strong> pattern:</p>
+      <p class="zh">移动应用、离线优先的店面和支付 Webhook 都会产生在其事件时间窗口已关闭后才到达的事件。Flink 通过<strong>滚动窗口 + 水印 + 宽限期</strong>模式处理这种情况：</p>
+      <ul>
+        <li class="en">Flink tracks the <strong>maximum seen event timestamp</strong> and advances its watermark to <code>max_ts − 60 s</code>. Events with <code>ts ≥ watermark</code> are still "on time" for their window; they update accumulators normally.</li>
+        <li class="zh">Flink 跟踪<strong>已见的最大事件时间戳</strong>，并将水印推进至 <code>max_ts − 60 s</code>。满足 <code>ts ≥ watermark</code> 的事件对其窗口而言仍属"准时"；它们正常更新累加器。</li>
+        <li class="en">The window <strong>emits its result when the watermark passes the window end</strong> — not when wall-clock time passes it. This ensures events within the 60-second grace window still land in the correct bucket.</li>
+        <li class="zh">窗口在<strong>水印超过窗口结束时间时发出结果</strong>——而非挂钟时间超过时。这确保 60 秒宽限期内的事件仍落入正确的桶。</li>
+        <li class="en">Events that arrive <strong>beyond the grace period</strong> (e.g., a mobile order event from 8 minutes ago) go to a <strong>side output</strong> — a secondary Kafka topic or in-memory buffer. A micro-batch job drains the side output periodically, groups late events by <code>(shop_id, time_bucket)</code>, and triggers a targeted bucket recompute: re-reads those events from the Kafka log, recalculates the rollup, and upserts the corrected value into the OLAP store. Because the upsert is idempotent, this correction is safe to replay.</li>
+        <li class="zh">超出宽限期到达的事件（例如 8 分钟前的移动端订单事件）进入<strong>侧输出</strong>——一个辅助 Kafka Topic 或内存缓冲区。微批作业定期消费侧输出，按 <code>(shop_id, time_bucket)</code> 分组迟到事件，并触发针对性桶重计算：从 Kafka 日志重新读取这些事件，重新计算汇总值，并将修正值 Upsert 到 OLAP 存储。由于 Upsert 是幂等的，此修正可以安全重放。</li>
+      </ul>
+      <p class="en"><strong>Pipeline bug correction via Kappa replay:</strong> when a bug inflates or deflates revenue figures (e.g., a Flink job version that double-counts currency conversions), the fix is: deploy the corrected job version, rewind Kafka offsets to the start of the affected window, run the job in high-throughput batch-replay mode — it recomputes all rollup rows for the affected time range and upserts them. The raw event log is the immutable source of truth; the OLAP rollups are a derived view that can always be recomputed. This is the Kappa "undo button".</p>
+      <p class="zh"><strong>通过 Kappa 回放修正流水线 Bug：</strong>当 Bug 导致收入数据虚高或虚低时（例如一个重复计算货币转换的 Flink 作业版本），修复方式是：部署修正后的作业版本，将 Kafka 偏移量倒回受影响窗口的起点，以高吞吐批量回放模式运行作业——它重新计算受影响时间范围内的所有汇总行并 Upsert 进去。原始事件日志是不可变的真相源；OLAP 汇总是可以随时重新计算的派生视图。这就是 Kappa 架构的"撤销按钮"。</p>
+
+      <pre><code><span class="c">-- Flink pseudo-code: exactly-once revenue rollup with late-data side output</span>
+
+<span class="k">stream</span> = kafka.consume(<span class="s">"order_events"</span>)
+          .assignTimestampsAndWatermarks(
+              WatermarkStrategy.forBoundedOutOfOrderness(Duration.ofSeconds(<span class="n">60</span>))
+          )
+
+<span class="k">late_output</span> = OutputTag(<span class="s">"late-orders"</span>)
+
+<span class="k">result</span> = stream
+  .keyBy(e => (e.shop_id, e.metric))                <span class="c">-- keyed by shop + metric</span>
+  .window(TumblingEventTimeWindows.of(Duration.ofMinutes(<span class="n">1</span>)))
+  .allowedLateness(Duration.ofSeconds(<span class="n">60</span>))          <span class="c">-- grace period inside window</span>
+  .sideOutputLateData(late_output)                   <span class="c">-- very-late → side output</span>
+  .aggregate(RevenueAccumulator)                     <span class="c">-- SUM(revenue_cents) per bucket</span>
+
+<span class="c">-- Normal path: upsert completed rollup row into OLAP (idempotent on event_id)</span>
+result.sinkTo(
+  OLAPIdempotentUpsert(<span class="s">"metric_rollup"</span>, key=<span class="s">"(shop_id, metric, time_bucket)"</span>)
+)
+
+<span class="c">-- Late path: collect in side output topic; micro-batch job upserts corrections</span>
+result.getSideOutput(late_output)
+  .sinkTo(kafka.produce(<span class="s">"late-order-corrections"</span>))  <span class="c">-- drained by correction job</span>
+
+<span class="c">-- Checkpoints every 30 s → S3 (Chandy-Lamport barriers through operator DAG)</span>
+<span class="c">-- On restart: rewind to checkpoint offset; idempotent sink absorbs replay</span></code></pre>
+
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">Exactness comes from exactly-once streaming + idempotent sink, not from a batch layer</span><span class="zh">精确性来自精确一次流处理 + 幂等 Sink，而非批处理层</span></span>
+        <p class="en">A common misconception is that exact revenue requires Lambda architecture — i.e., a batch layer that periodically recomputes the "true" number. It does not. The batch layer in Lambda only earns its keep if your stream processing cannot be made correct. With Flink checkpointing (exactly-once state) plus an idempotent OLAP sink (exactly-once write, keyed by <code>event_id</code>), the stream pipeline itself produces the exact number. The Kappa replay path handles bug corrections without needing a permanently running batch fleet. The per-metric split remains: revenue uses this exactly-once path; unique visitors use at-least-once + HLL (where sketch mergeability, not counting precision, is the goal).</p>
+        <p class="zh">一个常见误解是精确收入需要 Lambda 架构——即一个定期重算"真实数字"的批处理层。其实并不需要。Lambda 中的批处理层只有在流处理本身无法做到正确时才有价值。通过 Flink Checkpoint（精确一次状态）加上幂等 OLAP Sink（精确一次写入，以 <code>event_id</code> 为键），流处理流水线本身就能产生精确数字。Kappa 回放路径无需永久运行的批处理集群即可处理 Bug 修正。按指标分层仍然成立：收入使用这条精确一次路径；独立访客使用至少一次 + HLL（目标是草图可合并性，而非计数精确性）。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -961,6 +1023,183 @@ body.zh .zh{display:revert;}
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table above is the at-a-glance version. Below is the reasoning a staff candidate must be able to give for each row — why both options exist, their pros and cons, and the concrete rule for choosing one.</p>
+      <p class="zh">上表是速览版本。下面是 Staff 候选人必须能够给出的推理：每行为何存在两个选项、各自的优缺点，以及选择的判断标准。</p>
+
+      <h3><span class="en">① Metric accuracy — exact everywhere vs per-metric split</span><span class="zh">① 指标精确性 —— 全部精确 vs 按指标分层</span></h3>
+      <p class="en"><strong>The tension:</strong> exact counting is always correct, but unique-visitor counting is fundamentally a high-cardinality problem — storing a set of user fingerprints per bucket per shop is wildly expensive. Should you pay that cost uniformly, or differentiate by business impact?</p>
+      <p class="zh"><strong>矛盾点：</strong>精确计数始终是正确的，但独立访客计数本质上是高基数问题——为每个店铺的每个时间桶存储用户指纹集合代价极高。是全部支付这一成本，还是按业务影响区分对待？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Exact counts everywhere</span><span class="zh">方案 A · 全部精确计数</span></div>
+          <p class="en">Store exact sets (e.g., a bitmap or sorted set of user IDs) per bucket for all metrics including visitors, then count at query time.</p>
+          <p class="zh">为所有指标（包括访客）在每个桶内存储精确集合（如用户 ID 的位图或有序集），查询时再计数。</p>
+          <p class="en"><strong>+</strong> Simple mental model — one consistency guarantee for everything; no ambiguity about which column to trust.</p>
+          <p class="zh"><strong>+</strong> 心智模型简单——所有内容统一一个一致性保证；不存在"该信哪个列"的歧义。</p>
+          <p class="en"><strong>−</strong> Storing a set of millions of user fingerprints per (shop × bucket) is O(N) memory and storage. At 10M shops × 1440 min/day, even sparse usage balloons the OLAP footprint to terabytes. Merging sets across windows (hourly = sum of 60 minute sets) requires full set union — impossible to do incrementally at query time without re-scanning raw data.</p>
+          <p class="zh"><strong>−</strong> 为每个（店铺 × 桶）存储百万级用户指纹集合需要 O(N) 的内存和存储。在 1000 万店铺 × 1440 分钟/天的规模下，即便是稀疏使用也会让 OLAP 存储膨胀到 TB 级别。跨窗口合并集合（小时 = 60 个分钟集合的并集）需要完整集合求并——不可能在查询时增量完成，除非重新扫描原始数据。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · HyperLogLog/HLL for visitors, exact for financial</span><span class="zh">方案 B · 访客用 HyperLogLog/HLL，财务指标用精确值</span></div>
+          <p class="en">Revenue and order count use exact additive rollups (a BIGINT that increments). Unique visitors use an HLL sketch — a compact probabilistic data structure with ~1% relative error and ~1/1000 the memory of an exact set.</p>
+          <p class="zh">收入和订单数使用精确可加汇总（自增的 BIGINT）。独立访客使用 HLL 草图——一种紧凑的概率性数据结构，相对误差约 1%，内存占用约为精确集合的 1/1000。</p>
+          <p class="en"><strong>+</strong> HLL sketches are <em>mergeable</em>: combine the minute-1 and minute-2 HLLs to get the two-minute estimate without re-scanning events. This is what makes rollup aggregation for visitors efficient across arbitrary time ranges. Memory per bucket shrinks from megabytes to kilobytes.</p>
+          <p class="zh"><strong>+</strong> HLL 草图<em>可合并</em>：将第 1 分钟和第 2 分钟的 HLL 合并即可得到两分钟的估算，无需重新扫描事件。这正是跨任意时间范围对访客进行高效汇总聚合的关键。每个桶的内存从 MB 级降至 KB 级。</p>
+          <p class="en"><strong>−</strong> ~1% error on visitor counts is inherent — not suitable for financial reporting or legal compliance. Requires two code paths and two schema columns (<code>value_exact</code> vs <code>value_hll</code>), and developers must know which column to query per metric.</p>
+          <p class="zh"><strong>−</strong> 访客计数约 1% 的误差是固有的——不适用于财务报告或法律合规。需要两条代码路径和两个 Schema 列（<code>value_exact</code> vs <code>value_hll</code>），开发者必须知道每个指标应查询哪一列。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Default to the per-metric split.</strong> The rule is simple: does this metric influence a financial transaction or legal record? Revenue, order count, AOV → exact (any error is a business harm). Unique visitors, session counts → HLL (1% error is invisible to a merchant glancing at a trend chart, and the memory savings are enormous). Document the split in the schema — <code>value_exact</code> and <code>value_hll</code> columns enforce it structurally.</p>
+        <p class="zh"><strong>默认采用按指标分层方案。</strong>判断规则很简单：该指标是否影响财务交易或法律记录？收入、订单数、AOV → 精确（任何误差都是业务损失）。独立访客数、会话数 → HLL（1% 误差对盯着趋势图的商家来说几乎不可察，而内存节省巨大）。在 Schema 中记录这一分层——<code>value_exact</code> 和 <code>value_hll</code> 列从结构上强制执行它。</p>
+      </div>
+
+      <h3><span class="en">② Architecture pattern — Lambda vs Kappa</span><span class="zh">② 架构模式 —— Lambda vs Kappa</span></h3>
+      <p class="en"><strong>The tension:</strong> a speed layer gives freshness; a batch layer gives accuracy after the fact. Lambda buys both by running them in parallel — but at the cost of maintaining two separate pipelines that must produce the same numbers.</p>
+      <p class="zh"><strong>矛盾点：</strong>速度层提供新鲜度；批处理层事后提供准确性。Lambda 通过并行运行两者来兼得——但代价是维护两条必须产生相同数字的独立流水线。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Lambda architecture</span><span class="zh">方案 A · Lambda 架构</span></div>
+          <p class="en">Two pipelines: a speed layer (Flink/Spark Streaming) for fresh but potentially approximate results, and a batch layer (Spark/Hive) running on a schedule for accurate finalized results. A serving layer merges their outputs, preferring the batch result for finalized windows.</p>
+          <p class="zh">两条流水线：速度层（Flink/Spark Streaming）提供新鲜但可能近似的结果；批处理层（Spark/Hive）按计划运行以获得准确的最终结果。服务层合并两者的输出，对已完成窗口优先使用批处理结果。</p>
+          <p class="en"><strong>+</strong> The batch layer is the "ground truth" — it can recompute with any algorithm, including non-incremental ones. Clear separation of concerns between freshness and accuracy.</p>
+          <p class="zh"><strong>+</strong> 批处理层是"最终真相"——可以使用任何算法（包括非增量算法）重新计算。新鲜度和准确性关注点清晰分离。</p>
+          <p class="en"><strong>−</strong> Duplicate aggregation logic in two codebases — they diverge over time; when they disagree, you don't know which to trust. Double the operational surface, double the on-call load. The merge logic itself is subtle and error-prone.</p>
+          <p class="zh"><strong>−</strong> 两套代码库中存在重复聚合逻辑——随时间推移出现分歧；当两者不一致时，无法判断该信哪个。运维面积翻倍，值班负担翻倍。合并逻辑本身也微妙且容易出错。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Kappa architecture</span><span class="zh">方案 B · Kappa 架构</span></div>
+          <p class="en">One Flink stream job handles both live aggregation and historical correction by replaying the durable Kafka event log. A "batch recompute" is just the same job pointed at historical offsets at higher throughput.</p>
+          <p class="zh">一个 Flink 流作业通过回放持久化的 Kafka 事件日志，同时承担实时聚合和历史修正。"批量重算"只是同一个作业指向历史偏移量以更高吞吐量运行。</p>
+          <p class="en"><strong>+</strong> Single codebase — the aggregation logic is identical for live and replay. Corrections always produce the same result as the live pipeline because they run the same code. Lower operational burden.</p>
+          <p class="zh"><strong>+</strong> 单一代码库——实时和回放的聚合逻辑完全相同。修正结果与实时流水线始终一致，因为运行的是同一段代码。运维负担更低。</p>
+          <p class="en"><strong>−</strong> Replay is bounded by Kafka's retention window (7 days by default). If you need to recompute a metric from 6 months ago, you need an extended cold archive. Some metrics (e.g., complex session stitching) may not be expressible as an incremental stream job.</p>
+          <p class="zh"><strong>−</strong> 回放受限于 Kafka 的保留窗口（默认 7 天）。如果需要从 6 个月前重算某个指标，需要扩展冷归档。某些指标（如复杂的会话拼接）可能无法表达为增量流作业。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Default to Kappa</strong> for this use case. The dual-codebase divergence risk in Lambda is a real production hazard — analytics pipelines are exactly where you most need a single source of truth. Kappa's replay from the Kafka log is the "undo button" for pipeline bugs, which is sufficient for revenue corrections within the retention window. Reserve Lambda only for metrics that genuinely require a batch-only algorithm (e.g., a machine-learning model that must train on a full day's data before scoring), which is rare.</p>
+        <p class="zh"><strong>本场景默认选择 Kappa。</strong>Lambda 中双代码库的分歧风险是真实的生产隐患——分析流水线恰恰是最需要单一真相源的地方。从 Kafka 日志的 Kappa 回放是流水线 Bug 的"撤销按钮"，在保留窗口内足以支撑收入修正。仅当某个指标真正需要批处理专有算法（例如需要在一整天数据上训练后才能打分的机器学习模型）时才保留 Lambda，这种情况很罕见。</p>
+      </div>
+
+      <h3><span class="en">③ Aggregation timing — pre-aggregate at ingest vs query-time aggregation</span><span class="zh">③ 聚合时机 —— 摄入时预聚合 vs 查询时聚合</span></h3>
+      <p class="en"><strong>The tension:</strong> should you transform raw events into rollup rows as they arrive, locking in a fixed granularity, or store raw events and let the query engine aggregate on the fly for maximum flexibility?</p>
+      <p class="zh"><strong>矛盾点：</strong>应该在事件到达时将其转换为汇总行（固定粒度），还是存储原始事件并让查询引擎实时聚合以获得最大灵活性？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Pre-aggregate rollups at ingest (Flink)</span><span class="zh">方案 A · 摄入时预聚合汇总（Flink）</span></div>
+          <p class="en">Flink writes one row per <code>(shop_id, metric, time_bucket)</code> — a per-minute summary — into the OLAP store as each window closes. Dashboard queries run over pre-computed rows, not raw events.</p>
+          <p class="zh">Flink 在每个窗口关闭时向 OLAP 存储写入每个 <code>(shop_id, metric, time_bucket)</code> 对应一行的分钟级摘要。仪表盘查询在预计算行上运行，而非原始事件。</p>
+          <p class="en"><strong>+</strong> Dashboard queries scan a tiny pre-computed dataset — sub-second latency is achievable even at millions-of-shops cardinality. Storage is orders of magnitude smaller than raw events.</p>
+          <p class="zh"><strong>+</strong> 仪表盘查询扫描的是极小的预计算数据集——即使在数百万店铺基数下也能实现亚秒级延迟。存储量比原始事件小几个数量级。</p>
+          <p class="en"><strong>−</strong> Locks in the granularity at write time. Ad-hoc queries at non-pre-aggregated granularities (e.g., 5-minute buckets when you only stored 1-minute and 1-hour) require merging lower-level rollups, which may not always be possible for non-additive metrics.</p>
+          <p class="zh"><strong>−</strong> 写入时锁定粒度。以非预聚合粒度进行的即席查询（例如只存了 1 分钟和 1 小时，却想查 5 分钟桶）需要合并低级汇总，对非可加性指标可能并不总是可行。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Store raw events, aggregate at query time</span><span class="zh">方案 B · 存储原始事件，查询时聚合</span></div>
+          <p class="en">Every raw event is stored in a columnar OLAP store; queries run <code>GROUP BY shop_id, time_bucket</code> over billions of raw rows.</p>
+          <p class="zh">每个原始事件存储在列式 OLAP 存储中；查询对数十亿条原始行运行 <code>GROUP BY shop_id, time_bucket</code>。</p>
+          <p class="en"><strong>+</strong> Maximum query flexibility — any granularity, any metric, any filter possible at query time without re-processing.</p>
+          <p class="zh"><strong>+</strong> 最大查询灵活性——任何粒度、任何指标、任何过滤条件都可在查询时实现，无需重新处理。</p>
+          <p class="en"><strong>−</strong> Query-time aggregation over billions of raw events cannot achieve sub-second dashboard latency at Shopify's scale, even with columnar compression. Storage cost is 100–1000× higher. The Kafka 7-day retention means this approach requires a separate raw-event store with long retention, adding more cost and complexity.</p>
+          <p class="zh"><strong>−</strong> 在 Shopify 的规模下，对数十亿条原始事件进行查询时聚合无法实现亚秒级仪表盘延迟，即使有列式压缩也不行。存储成本高出 100–1000 倍。Kafka 7 天保留期意味着此方案还需要一个独立的长期原始事件存储，进一步增加成本和复杂度。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Pre-aggregate for known metrics at known granularities</strong> — this is non-negotiable for sub-second dashboard SLA at scale. Keep raw events in Kafka (7 days) for replay and ad-hoc analysis only; do not pay to store them long-term in OLAP. If a new metric needs a different granularity, Kappa replay can backfill a new rollup table from the event log. The key insight: pre-aggregation shifts the expensive computation from query time (on every dashboard load) to ingest time (once per event), which is an asymptotic win at high read QPS.</p>
+        <p class="zh"><strong>对已知粒度的已知指标预聚合</strong>——这对规模化下亚秒级仪表盘 SLA 而言是不可妥协的。原始事件仅保留在 Kafka（7 天）用于回放和即席分析；不要为 OLAP 长期存储付出代价。如果新指标需要不同粒度，Kappa 回放可以从事件日志回填新的汇总表。关键洞察：预聚合将昂贵的计算从查询时（每次仪表盘加载）转移到摄入时（每事件一次），在高读取 QPS 下是渐近级别的优势。</p>
+      </div>
+
+      <h3><span class="en">④ Data freshness vs cost — sub-second streaming vs micro-batch</span><span class="zh">④ 数据新鲜度 vs 成本 —— 亚秒级流处理 vs 微批处理</span></h3>
+      <p class="en"><strong>The tension:</strong> true sub-second freshness everywhere is expensive — every event must be processed and served immediately with no batching opportunity. But for most dashboard metrics, is that freshness actually needed?</p>
+      <p class="zh"><strong>矛盾点：</strong>全局真正亚秒级新鲜度代价高昂——每个事件必须立即处理和提供服务，没有批处理机会。但对大多数仪表盘指标而言，是否真的需要这种新鲜度？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Sub-second freshness everywhere</span><span class="zh">方案 A · 全局亚秒级新鲜度</span></div>
+          <p class="en">Every Kafka event is processed and reflected in the OLAP store within milliseconds. No tumbling windows — the serving cache is updated on every event.</p>
+          <p class="zh">每个 Kafka 事件在毫秒内处理并反映到 OLAP 存储中。无滚动窗口——每个事件都更新服务缓存。</p>
+          <p class="en"><strong>+</strong> Perfect real-time experience; merchants watching a live sale see revenue tick up in near real-time.</p>
+          <p class="zh"><strong>+</strong> 完美的实时体验；商家在观看实时促销时看到收入近实时递增。</p>
+          <p class="en"><strong>−</strong> Write amplification: every event causes an OLAP write, which is far more expensive than batching. At 500k events/sec, sub-second OLAP updates are extremely costly. The compute cluster must be sized for peak throughput, not average — expensive when the platform is quiet.</p>
+          <p class="zh"><strong>−</strong> 写放大：每个事件触发一次 OLAP 写入，远比批处理昂贵。在 50 万事件/秒的规模下，亚秒级 OLAP 更新成本极高。计算集群必须按峰值吞吐而非平均值定容——平台空闲时代价高昂。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Micro-batch (5–30 s windows) for OLAP; sub-second for Redis hot path only</span><span class="zh">方案 B · OLAP 用微批（5–30 秒窗口），只有 Redis 热路径用亚秒级</span></div>
+          <p class="en">Flink emits OLAP rollup rows at window close (every 5–30 seconds), batching many events into one row. Only the Redis serving-cache snapshot is updated continuously (every ~5 seconds) for the live strip.</p>
+          <p class="zh">Flink 在窗口关闭时（每 5–30 秒）发出 OLAP 汇总行，将多个事件批处理为一行。只有 Redis 服务缓存快照持续更新（每约 5 秒）用于实时展示条。</p>
+          <p class="en"><strong>+</strong> Far fewer OLAP writes — one row per (shop × metric × bucket) rather than one per event. Compute cost tracks average load, not peak. The 5-second Redis refresh is imperceptible to a merchant reading a live counter.</p>
+          <p class="zh"><strong>+</strong> OLAP 写入量大幅减少——每（店铺 × 指标 × 桶）一行，而非每事件一行。计算成本跟随平均负载，而非峰值。对于商家查看实时计数器，5 秒 Redis 刷新是难以察觉的。</p>
+          <p class="en"><strong>−</strong> OLAP data lags real-time by up to the window size (30 s). Intermediate "current minute" data must be served from Redis rather than OLAP, requiring the Query API to stitch the two together for queries that span a recent incomplete window.</p>
+          <p class="zh"><strong>−</strong> OLAP 数据最多落后实时窗口大小（30 秒）。当前分钟的中间数据必须从 Redis 而非 OLAP 服务，查询 API 需要为跨越最近未完成窗口的查询将两者拼接。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Use micro-batch for OLAP rollups</strong> and keep sub-second freshness only for the Redis live-strip cache. The economic argument is decisive: at 500k events/sec, batching 30 seconds of events into one OLAP write reduces write volume by ~15,000× for the same data. The merchant's eye cannot perceive 5 seconds of lag on a revenue counter. True sub-second freshness earns its cost only for the live visitor counter and "orders right now" widgets where immediacy is the UX point.</p>
+        <p class="zh"><strong>OLAP 汇总使用微批处理</strong>，亚秒级新鲜度只保留给 Redis 实时展示条缓存。经济论据是决定性的：在 50 万事件/秒规模下，将 30 秒的事件批处理为一次 OLAP 写入，对相同数据的写入量减少约 15,000 倍。商家的眼睛无法察觉收入计数器上 5 秒的延迟。真正亚秒级新鲜度只在实时访客计数和"当前订单"组件上值得其成本——那里即时性是用户体验的核心。</p>
+      </div>
+
+      <h3><span class="en">⑤ Processing guarantee — at-least-once vs exactly-once</span><span class="zh">⑤ 处理语义保证 —— 至少一次 vs 精确一次</span></h3>
+      <p class="en"><strong>The tension:</strong> exactly-once processing is more complex and slower, but at-least-once processing means a job restart can double-count events. For a revenue metric, that double-count is a real business harm. For a visitor count, a 0.01% duplicate session barely moves the HLL estimate.</p>
+      <p class="zh"><strong>矛盾点：</strong>精确一次处理更复杂、更慢，但至少一次处理意味着作业重启可能导致事件重复计数。对于收入指标，重复计数是真实的业务损失。对于访客计数，0.01% 的重复会话几乎不影响 HLL 估算。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · At-least-once processing</span><span class="zh">方案 A · 至少一次处理</span></div>
+          <p class="en">Flink processes events without transactional checkpoints. On restart it re-reads from the last committed Kafka offset, which may replay some already-processed events.</p>
+          <p class="zh">Flink 处理事件时不使用事务性 Checkpoint。重启时从最后提交的 Kafka 偏移量重新读取，可能重放部分已处理的事件。</p>
+          <p class="en"><strong>+</strong> Simpler to implement; lower checkpoint overhead; faster processing throughput; sufficient for metrics where duplicates are tolerable (HLL visitor counts self-correct duplicates).</p>
+          <p class="zh"><strong>+</strong> 实现更简单；Checkpoint 开销更低；处理吞吐更快；对重复可容忍的指标（HLL 访客计数自动修正重复）已足够。</p>
+          <p class="en"><strong>−</strong> A Flink restart after a failure can double-count revenue events for the replay window — inflating reported revenue until corrected. This requires idempotent consumers as a mandatory safety net, which partially negates the simplicity advantage.</p>
+          <p class="zh"><strong>−</strong> 故障后 Flink 重启可能在回放窗口内重复计数收入事件——在修正之前收入数据虚高。这需要幂等消费者作为强制安全网，部分抵消了简单性优势。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Exactly-once (Flink checkpoint + idempotent sink)</span><span class="zh">方案 B · 精确一次（Flink Checkpoint + 幂等 Sink）</span></div>
+          <p class="en">Flink checkpoints the entire job state (including Kafka consumer offsets) to durable storage (S3/GCS) every 30 seconds. On restart, the job rewinds to the checkpoint — events between the checkpoint and failure are re-processed, but the OLAP sink is idempotent (keyed on <code>event_id</code>), so no duplicates land.</p>
+          <p class="zh">Flink 每 30 秒将整个作业状态（包括 Kafka 消费者偏移量）Checkpoint 到持久化存储（S3/GCS）。重启时作业倒回到 Checkpoint——Checkpoint 与故障之间的事件被重新处理，但 OLAP Sink 是幂等的（以 <code>event_id</code> 为键），因此不会有重复数据落库。</p>
+          <p class="en"><strong>+</strong> Revenue figures are correct by construction across restarts, network retries, and partial failures. No need for post-hoc reconciliation jobs to fix double-counts.</p>
+          <p class="zh"><strong>+</strong> 收入数据在重启、网络重试和部分故障后天然正确。无需事后对账作业来修正重复计数。</p>
+          <p class="en"><strong>−</strong> ~5–10% throughput overhead for checkpointing; checkpoint state can be large for long-running jobs with large state (e.g., HLL sketches for millions of active shops). Transactional sinks (two-phase commit to OLAP) add latency to every window commit.</p>
+          <p class="zh"><strong>−</strong> Checkpoint 带来约 5–10% 的吞吐开销；对于状态较大的长运行作业（如数百万活跃店铺的 HLL 草图），Checkpoint 状态可能非常大。事务性 Sink（向 OLAP 的两阶段提交）为每次窗口提交增加延迟。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Exactly-once is non-negotiable for revenue.</strong> A merchant making a $50k inventory decision on double-counted revenue is a direct business harm — and the 5–10% throughput cost is negligible compared to the risk. For visitor counts (HLL), at-least-once is fine: duplicate <code>user_fingerprint</code> values simply hash to the same HLL bucket, having minimal effect on the estimate. The practical rule: if the metric drives money or legal compliance, pay for exactly-once; if it drives trend awareness, at-least-once suffices.</p>
+        <p class="zh"><strong>收入必须用精确一次，不可妥协。</strong>商家基于重复计数的收入数据做出 5 万美元的库存决策，是直接的业务损失——而 5–10% 的吞吐成本与风险相比可以忽略不计。对于访客计数（HLL），至少一次完全可行：重复的 <code>user_fingerprint</code> 值只是散列到相同的 HLL 桶，对估算结果影响极小。实用规则：如果指标影响资金或法律合规，支付精确一次的代价；如果只用于趋势感知，至少一次已足够。</p>
+      </div>
+
+      <h3><span class="en">⑥ Hot/cold storage tiering — all-in-OLAP vs Parquet archive</span><span class="zh">⑥ 冷热存储分层 —— 全量 OLAP vs Parquet 归档</span></h3>
+      <p class="en"><strong>The tension:</strong> OLAP stores on NVMe are fast but expensive. Object storage (S3/GCS Parquet) is very cheap but query latency is much higher. Where do you draw the hot/cold boundary?</p>
+      <p class="zh"><strong>矛盾点：</strong>NVMe 上的 OLAP 存储速度快但价格昂贵。对象存储（S3/GCS Parquet）非常便宜但查询延迟高得多。冷热边界应划在哪里？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · All rollups in the OLAP hot store</span><span class="zh">方案 A · 所有汇总数据保留在 OLAP 热存中</span></div>
+          <p class="en">Store 2 years of per-minute rollups in ClickHouse/Druid. All dashboard queries hit the same fast store regardless of time range.</p>
+          <p class="zh">在 ClickHouse/Druid 中存储 2 年的分钟级汇总数据。所有仪表盘查询无论时间范围都访问同一快速存储。</p>
+          <p class="en"><strong>+</strong> Uniform query experience — the same sub-second SLA holds for "today" and "1 year ago". No routing complexity.</p>
+          <p class="zh"><strong>+</strong> 统一的查询体验——"今天"和"一年前"都保证亚秒级 SLA。无路由复杂性。</p>
+          <p class="en"><strong>−</strong> NVMe storage for 2 years of data across 10M shops is extremely expensive. 90% of queries are for "today" or "last 7 days" — you are paying NVMe prices to store data that is almost never read at low latency.</p>
+          <p class="zh"><strong>−</strong> 10M 店铺 2 年数据的 NVMe 存储成本极高。90% 的查询是"今天"或"最近 7 天"——你在用 NVMe 价格存储几乎不会被低延迟读取的数据。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · 90-day hot OLAP + Parquet/S3 cold archive</span><span class="zh">方案 B · 90 天热 OLAP + Parquet/S3 冷归档</span></div>
+          <p class="en">OLAP holds 90 days of rollups on NVMe. Rollups older than 90 days are exported as Parquet files to S3/GCS and queried via Presto/Trino for custom historical ranges. The Query API routes transparently based on the requested range.</p>
+          <p class="zh">OLAP 在 NVMe 上保留 90 天汇总数据。超过 90 天的汇总数据以 Parquet 文件形式导出到 S3/GCS，通过 Presto/Trino 查询自定义历史范围。Query API 根据请求的时间范围透明路由。</p>
+          <p class="en"><strong>+</strong> S3 storage costs ~10–20× less than NVMe per GB. 90% of queries (recent data) stay on the fast path. The Parquet format compresses well and Presto/Trino can still answer a "last 12 months trend" query — just with higher latency (seconds, not sub-second), which is acceptable for a historical range query.</p>
+          <p class="zh"><strong>+</strong> S3 存储每 GB 成本约低 10–20 倍。90% 的查询（近期数据）保持在快速路径。Parquet 格式压缩率好，Presto/Trino 仍可回答"最近 12 个月趋势"查询——只是延迟更高（秒级而非亚秒级），对历史范围查询可以接受。</p>
+          <p class="en"><strong>−</strong> Two query engines to operate and version (ClickHouse + Presto). The Query API must detect which time ranges span the hot/cold boundary and correctly stitch results from both stores.</p>
+          <p class="zh"><strong>−</strong> 需要运维和版本管理两个查询引擎（ClickHouse + Presto）。Query API 必须检测哪些时间范围跨越冷热边界，并正确拼接来自两个存储的结果。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Tier at 90 days.</strong> The access pattern is strongly recency-biased: over 90% of dashboard loads look at the past week. Paying NVMe prices for 2 years of data means 90%+ of storage cost is serving &lt;10% of queries. The Query API routing complexity is modest (a date-range check), and Presto/Trino's higher latency for historical queries is acceptable to merchants who explicitly navigate to a custom "last year" range. As a corollary: also consider downsampling per-minute rollups to per-hour after 7 days and per-day after 30 days to reduce cold-store volume further.</p>
+        <p class="zh"><strong>在 90 天处分层。</strong>访问模式强烈偏向近期数据：超过 90% 的仪表盘加载查看的是过去一周。为 2 年数据支付 NVMe 价格意味着 90% 以上的存储成本用于服务不到 10% 的查询。Query API 路由复杂度不高（一个日期范围检查），而 Presto/Trino 对历史查询的较高延迟对于明确导航到自定义"去年"范围的商家是可以接受的。推论：还应考虑在 7 天后将分钟级汇总降采样为小时级，30 天后降为天级，进一步减少冷存储量。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->

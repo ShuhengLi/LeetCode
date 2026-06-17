@@ -836,6 +836,27 @@ redis.call(<span class="s">'EXPIRE'</span>, KEYS[2], ARGV[2])  <span class="c">-
       so a sneaker drop cannot exhaust connection pools or Redis shared by ordinary checkout. The sale has a <strong>kill switch</strong>:
       circuit-break the sale, never the platform.</p>
       <p class="zh">秒杀流量被路由到<strong>独立集群 / 队列</strong>（或独立 Pod，参见 Q04），拥有专属速率限制，使一次球鞋秒杀无法耗尽普通结账共用的连接池或 Redis。活动设有<strong>断路开关</strong>：熔断的是本次活动，而不是整个平台。</p>
+
+      <h3><span class="en">⑥ Reservation lifecycle — the state machine behind "held for you"</span><span class="zh">⑥ 预留生命周期 —— "为您保留"背后的状态机</span></h3>
+      <p class="en">A reservation is a small state machine, and getting its transitions right is what makes reserve-then-pay safe. A <code>RESERVED</code> row moves to <code>PAID</code> on success; to <code>EXPIRED</code> if the TTL elapses unpaid; or to <code>CANCELLED</code> if the buyer backs out. Both EXPIRED and CANCELLED must <strong>return the unit to the pool</strong>; a later refund moves PAID → <code>REFUNDED</code> and also releases stock.</p>
+      <p class="zh">一条预留就是一个小型状态机，把它的状态转换做对，正是"先预订再支付"安全的关键。<code>RESERVED</code> 行在成功时转为 <code>PAID</code>；若 TTL 到期仍未支付则转为 <code>EXPIRED</code>；若买家放弃则转为 <code>CANCELLED</code>。EXPIRED 和 CANCELLED 都必须<strong>把该单位归还到库存池</strong>；之后的退款则把 PAID → <code>REFUNDED</code> 并同样释放库存。</p>
+      <pre><code><span class="c">States:  RESERVED ──pay ok──▶ PAID ──cancel/refund──▶ REFUNDED</span>
+<span class="c">            ├── TTL elapsed, unpaid ──▶ EXPIRED    (release unit)</span>
+<span class="c">            └── buyer cancels ────────▶ CANCELLED  (release unit)</span>
+
+<span class="c">-- expiry worker, runs every ~30s; release is idempotent</span>
+<span class="k">for</span> r <span class="k">in</span> SELECT * FROM reservation
+         WHERE status=<span class="s">'RESERVED'</span> AND expires_at &lt; now() LIMIT 1000:
+    n = UPDATE reservation SET status=<span class="s">'EXPIRED'</span>
+        WHERE reservation_id=r.id AND status=<span class="s">'RESERVED'</span>   <span class="c">-- single-winner guard</span>
+    <span class="k">if</span> n == 1:                                  <span class="c">-- only the winner releases stock</span>
+        redis.INCRBY(<span class="s">'sale:'</span>+r.sale+<span class="s">':stock'</span>, 1)
+        UPDATE flash_sale SET qty_sold = qty_sold - 1 WHERE sale_id = r.sale</code></pre>
+      <div class="callout callout--tradeoff">
+        <span class="ct"><span class="en">Why the <code>WHERE status='RESERVED'</code> guard matters</span><span class="zh">为什么需要 <code>WHERE status='RESERVED'</code> 这个守卫</span></span>
+        <p class="en">The expiry worker, a <em>retry</em> of that worker, and a user-initiated cancel can all race on the same reservation. Making the release <strong>conditional on the current state</strong> means exactly one of them wins the transition — so a slot is returned to the pool <strong>once, never twice</strong> (releasing twice would oversell). This single-winner, idempotent release is what makes reserve-then-pay safe in practice; the TTL length is then a pure business dial — shorter frees stuck inventory faster, longer is kinder to slow-but-real payers.</p>
+        <p class="zh">过期 worker、它的<em>重试</em>、以及用户主动取消，可能同时对同一条预留发生竞争。把释放做成<strong>依赖当前状态的条件更新</strong>，意味着只有其中一个能赢得这次状态转换——于是槽位只归还<strong>一次，绝不两次</strong>（归还两次就会超卖）。这种"单一胜者、幂等"的释放，正是"先预订再支付"在实践中安全的根本；而 TTL 时长此时就是一个纯业务旋钮——越短越快释放被占住的库存，越长则对真正慢的付款者越友好。</p>
+      </div>
     </section>
 
     <!-- 7 TRADE-OFFS -->
@@ -876,6 +897,150 @@ redis.call(<span class="s">'EXPIRE'</span>, KEYS[2], ARGV[2])  <span class="c">-
           </tr>
         </tbody>
       </table>
+
+      <p class="en">The table is the at-a-glance version. Below is the reasoning a staff candidate should be able to give for each row — why both options exist, their pros and cons, and the rule for picking one.</p>
+      <p class="zh">上表是一眼速览版。下面是 staff 候选人应当能讲出的推理：每一行为什么会有两个选项、各自的优缺点，以及做选择的判断标准。</p>
+
+      <h3><span class="en">① Inventory authority — Redis gate vs DB row-lock</span><span class="zh">① 库存权威 —— Redis 闸口 vs 数据库行锁</span></h3>
+      <p class="en"><strong>The tension:</strong> where does the authoritative "is there a unit left?" decision live — in fast in-memory state, or in the durable database?</p>
+      <p class="zh"><strong>矛盾点：</strong>"还有没有库存"这个权威判断放在哪里——放在快速的内存里，还是放在持久的数据库里？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Redis counter</span><span class="zh">方案 A · Redis 计数器</span></div>
+          <p class="en">Stock is an integer in Redis; each reserve is an atomic <code>DECRBY</code>, rejected if it goes negative.</p>
+          <p class="zh">库存是 Redis 里的一个整数；每次预订做一次原子 <code>DECRBY</code>，结果为负就拒绝。</p>
+          <p class="en"><strong>+</strong> Microsecond latency; single-threaded Redis serializes every reserve with no locks; one hot SKU with 100k concurrent buyers is trivial; zero DB contention.</p>
+          <p class="zh"><strong>+</strong> 微秒级延迟；单线程 Redis 无需加锁就把所有预订串行化；单热点 SKU、十万并发买家也轻松扛；数据库零竞争。</p>
+          <p class="en"><strong>−</strong> Not durable — an unclean failover can lose the last ~1s of decrements; it's a second source of truth that can drift from the DB; needs AOF + careful failover.</p>
+          <p class="zh"><strong>−</strong> 不持久——非正常故障切换可能丢失最近约 1 秒的扣减；它是与数据库并存的第二真相源，可能漂移；需要 AOF + 谨慎的故障切换。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · DB row-lock</span><span class="zh">方案 B · 数据库行锁</span></div>
+          <p class="en"><code>UPDATE … SET qty_sold=qty_sold+1 WHERE qty_sold&lt;qty_total</code>; the row lock serializes concurrent writers.</p>
+          <p class="zh"><code>UPDATE … SET qty_sold=qty_sold+1 WHERE qty_sold&lt;qty_total</code>；行锁把并发写串行化。</p>
+          <p class="en"><strong>+</strong> Durable, transactional, a single authoritative source of truth that survives crashes.</p>
+          <p class="zh"><strong>+</strong> 持久、事务性，是能在崩溃中存活的唯一权威真相源。</p>
+          <p class="en"><strong>−</strong> One hot row is a serialization bottleneck — 10k+ concurrent reserves on the SAME row collapse throughput and spike latency (everyone queues on one lock); risks connection-pool exhaustion.</p>
+          <p class="zh"><strong>−</strong> 单热点行是串行化瓶颈——同一行上 1 万+并发预订会让吞吐崩塌、延迟飙升（所有人排在同一把锁上）；还可能耗尽连接池。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en">A 1000×-hot SKU is exactly what the DB row alone can't survive, so put Redis in front to absorb the herd — but because Redis isn't durable, the DB conditional write stays the final authority, with reconciliation catching drift. So: <strong>use both</strong>. For ordinary, non-spiky inventory (see Q02) a DB row with optimistic concurrency is enough on its own.</p>
+        <p class="zh">1000 倍热点 SKU 正是单靠数据库行扛不住的场景，所以用 Redis 挡在前面吸收人潮——但因为 Redis 不持久，数据库条件写仍是最终权威，再用对账发现漂移。所以：<strong>两者兼用</strong>。对普通、无尖峰的库存（见第 2 题），单用数据库行 + 乐观并发就够了。</p>
+      </div>
+
+      <h3><span class="en">② Fairness model — strict FIFO queue vs rate-limited tokens</span><span class="zh">② 公平性模型 —— 严格 FIFO 队列 vs 速率限制令牌</span></h3>
+      <p class="en"><strong>The tension:</strong> how "fair" must admission be, and what will you pay in throughput, latency and complexity for it?</p>
+      <p class="zh"><strong>矛盾点：</strong>入场要多"公平"，你愿意为此在吞吐、延迟和复杂度上付出多少？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Strict FIFO queue</span><span class="zh">方案 A · 严格 FIFO 队列</span></div>
+          <p class="en">Every joiner is appended to an ordered log (Redis Stream / one Kafka partition); a single consumer drains it in exact arrival order.</p>
+          <p class="zh">每个加入者被追加到有序日志（Redis Stream / 单个 Kafka 分区）；单个消费者按精确到达顺序消费。</p>
+          <p class="en"><strong>+</strong> Provable first-come-first-served; auditable and defensible — right when fairness is a brand or legal requirement (concert tickets, regulated drops).</p>
+          <p class="zh"><strong>+</strong> 可证明的先到先得；可审计、可辩护——当公平性是品牌或法律要求时（演唱会票、受监管发售）正合适。</p>
+          <p class="en"><strong>−</strong> A single ordered consumer is a hard throughput ceiling (can't parallelize one partition without losing order); adds wait latency; one slow step head-of-line-blocks the line.</p>
+          <p class="zh"><strong>−</strong> 单个有序消费者是硬性吞吐上限（不破坏顺序就无法并行化单分区）；增加等待延迟；一个慢步骤会队头阻塞整条队列。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Rate-limited tokens</span><span class="zh">方案 B · 速率限制令牌</span></div>
+          <p class="en">Admit at a controlled rate (e.g. 2000/min) without strict ordering; whoever is polling when a slot frees gets a token.</p>
+          <p class="zh">以受控速率放行（如 2000/分钟），不保证严格顺序；槽位释放时正在轮询的人拿到令牌。</p>
+          <p class="en"><strong>+</strong> Simple, high-throughput, horizontally scalable, low latency; "fair enough" — everyone's chance is proportional to the admission rate.</p>
+          <p class="zh"><strong>+</strong> 简单、高吞吐、可水平扩展、低延迟；"足够公平"——每个人的机会与放行速率成正比。</p>
+          <p class="en"><strong>−</strong> Not strictly FIFO — depending on poll timing, a later arrival can get in before an earlier one; harder to defend "exact fairness".</p>
+          <p class="zh"><strong>−</strong> 并非严格 FIFO——取决于轮询时机，后到的人可能比先到的先进；难以辩护"绝对公平"。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Default to tokens</strong> for e-commerce flash sales — the goal is no-oversell + bot mitigation + protecting the backend, not courtroom-grade ordering. Reserve strict FIFO for when exact fairness is a hard product/legal requirement and throughput is modest.</p>
+        <p class="zh">电商抢购<strong>默认用令牌</strong>——目标是不超卖 + 防 bot + 保护后端，而不是法庭级排序。只有当"绝对公平"是硬性产品/法律要求且吞吐不高时，才用严格 FIFO。</p>
+      </div>
+
+      <h3><span class="en">③ Order of ops — reserve→pay vs pay→decrement</span><span class="zh">③ 操作顺序 —— 先预订再支付 vs 先支付再扣减</span></h3>
+      <p class="en"><strong>The tension:</strong> do you commit a unit <em>before</em> taking money, or take money first and then commit a unit? This one choice decides your failure mode: "inventory locked by people who never pay" vs "money taken for stock you can't deliver".</p>
+      <p class="zh"><strong>矛盾点：</strong>你是在收钱<em>之前</em>先锁定一个单位，还是先收钱再锁定？这一个选择决定了你的失败模式："库存被永不付款的人锁住" vs "钱已收但货发不出"。</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Reserve → pay</span><span class="zh">方案 A · 先预订再支付</span></div>
+          <p class="en">At <code>/reserve</code> you atomically claim a unit (Redis gate + a RESERVED row) <em>before</em> payment; the buyer then has N minutes to pay; an expiry worker releases the unit if they don't.</p>
+          <p class="zh">在 <code>/reserve</code> 时，在支付<em>之前</em>就原子占住一个单位（Redis 闸口 + 一条 RESERVED 行）；买家随后有 N 分钟支付；若未支付，过期 worker 释放该单位。</p>
+          <p class="en"><strong>+</strong> <strong>Never oversells</strong> — the unit is locked the instant you're admitted, so two people can't pay for the same one. <strong>Best UX</strong> — "held for you 09:58" lifts conversion; nobody pays then hears "sold out". <strong>Clean failures</strong> — if payment fails you just release; no money was taken.</p>
+          <p class="zh"><strong>+</strong> <strong>绝不超卖</strong>——被放行的瞬间单位就锁定，两人无法为同一件付款。<strong>最佳体验</strong>——"为您保留 09:58"提升转化；没人会付完款才被告知"售罄"。<strong>失败干净</strong>——支付失败就释放，从未收钱。</p>
+          <p class="en"><strong>−</strong> <strong>Inventory lockup</strong> — admitted users who dawdle or abandon hold units that could have sold, so you may show "sold out" while units sit reserved-but-unpaid. Needs the TTL machinery, and TTL tuning is a balance (too long worsens lockup, too short kicks out slow-but-real payers).</p>
+          <p class="zh"><strong>−</strong> <strong>库存被占住</strong>——磨蹭或放弃的已放行用户占着本可卖出的单位，于是可能在还有"已预留未支付"时就显示"售罄"。需要 TTL 机制，且 TTL 调参是平衡（太长加剧占用，太短把真正慢的付款者踢掉）。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · Pay → decrement</span><span class="zh">方案 B · 先支付再扣减</span></div>
+          <p class="en">Take payment first, <em>then</em> try to decrement stock; if stock is already gone, refund the buyer.</p>
+          <p class="zh">先收款，<em>然后</em>再尝试扣减库存；若库存已没，就给买家退款。</p>
+          <p class="en"><strong>+</strong> <strong>No inventory lockup</strong> — units are consumed only by people who actually paid, so effective sell-through is maximized when abandonment is high. <strong>Simpler model</strong> — no reservation/TTL state.</p>
+          <p class="zh"><strong>+</strong> <strong>无库存占用</strong>——单位只被真正付款的人消耗，因此放弃率高时实际售出率最高。<strong>模型更简单</strong>——无需预留/TTL 状态。</p>
+          <p class="en"><strong>−</strong> During a race you can accept <strong>more payments than units</strong>, then must refund the losers — money taken you can't fulfill (a "soft oversell"). <strong>Refunds</strong> cost fees, erode trust, and load support — and look terrible for a hyped drop ("you charged me then cancelled!"). Worse UX — the buyer pays under uncertainty.</p>
+          <p class="zh"><strong>−</strong> 抢购竞争中你可能收到<strong>比单位数更多的付款</strong>，然后必须退给落败者——收了无法履约的钱（"软超卖"）。<strong>退款</strong>要付手续费、损害信任、增加客服压力——对热门发售尤其难看（"你扣了我钱又取消！"）。体验更差——买家在不确定下付款。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en"><strong>Scarce, hyped drops → reserve-then-pay + a short TTL</strong>: the no-oversell guarantee and "held for you" UX are worth the TTL complexity. <strong>Pay-then-decrement only when</strong> stock is effectively abundant (decrement rarely fails), holds are impractical, or refunds are cheap and instant (e.g. digital goods).</p>
+        <p class="zh"><strong>稀缺、热门发售 → 先预订再支付 + 短 TTL</strong>：不超卖的保证和"为您保留"的体验值得这点 TTL 复杂度。<strong>仅当</strong>库存实际充足（扣减很少失败）、无法做预留、或退款廉价即时（如数字商品）时，才用先支付再扣减。</p>
+      </div>
+
+      <h3><span class="en">④ Waiting-room transport — polling vs SSE / long-poll</span><span class="zh">④ 等候室传输 —— 轮询 vs SSE / 长轮询</span></h3>
+      <p class="en"><strong>The tension:</strong> how do a million waiting clients learn "am I in yet?" without burying the origin in requests?</p>
+      <p class="zh"><strong>矛盾点：</strong>上百万等待的客户端如何获知"轮到我了吗？"，又不用请求把源站埋掉？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · HTTP polling</span><span class="zh">方案 A · HTTP 轮询</span></div>
+          <p class="en">The client GETs <code>/status</code> every few seconds.</p>
+          <p class="zh">客户端每隔几秒 GET 一次 <code>/status</code>。</p>
+          <p class="en"><strong>+</strong> Dead simple, works everywhere, fully stateless, and the "still waiting" response is trivially cacheable at the edge.</p>
+          <p class="zh"><strong>+</strong> 极其简单、到处可用、完全无状态，而且"仍在等待"的响应在边缘极易缓存。</p>
+          <p class="en"><strong>−</strong> 1M clients polling every 3s ≈ 330k req/s of mostly "not yet". Edge-cache the WAITING response (~1s) + jittered intervals to mitigate, but it's inherently wasteful.</p>
+          <p class="zh"><strong>−</strong> 100 万客户端每 3 秒轮询 ≈ 33 万 req/s，多是"还没轮到"。可边缘缓存 WAITING 响应（约 1 秒）+ 抖动间隔来缓解，但本质浪费。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · SSE / long-poll</span><span class="zh">方案 B · SSE / 长轮询</span></div>
+          <p class="en">The client holds one open connection; the server pushes the moment it flips to ADMITTED.</p>
+          <p class="zh">客户端保持一个长连接；服务端在状态翻转为 ADMITTED 的瞬间推送。</p>
+          <p class="en"><strong>+</strong> Near-zero polling waste and instant admission notification; far fewer requests overall.</p>
+          <p class="zh"><strong>+</strong> 几乎零轮询浪费，入场通知即时；总请求数大幅减少。</p>
+          <p class="en"><strong>−</strong> Holding ~1M concurrent connections costs file descriptors, memory and LB capacity; connection management is more complex (one-way SSE is fine here).</p>
+          <p class="zh"><strong>−</strong> 维持约 100 万并发连接消耗文件描述符、内存和负载均衡容量；连接管理更复杂（单向 SSE 在这里够用）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en">Start with <strong>edge-cached polling</strong> (simple, robust) for the MVP; switch to <strong>SSE / long-poll</strong> once polling QPS dominates cost at extreme scale. WebSocket only if you genuinely need bidirectional traffic — an admit signal doesn't.</p>
+        <p class="zh">MVP 先用<strong>边缘缓存轮询</strong>（简单稳健）；当轮询 QPS 在极端规模下成为主要成本时再换 <strong>SSE / 长轮询</strong>。只有真的需要双向通信才用 WebSocket——入场信号并不需要。</p>
+      </div>
+
+      <h3><span class="en">⑤ Over-admit factor — low vs high</span><span class="zh">⑤ 超发系数 —— 低 vs 高</span></h3>
+      <p class="en"><strong>The tension:</strong> you have 1000 units. How many buyers do you let into checkout — exactly 1000, or more to cover the ones who'll abandon?</p>
+      <p class="zh"><strong>矛盾点：</strong>你有 1000 件。放多少买家进入结账——正好 1000，还是多放些来覆盖会放弃的人？</p>
+      <div class="cards cols-2">
+        <div class="card">
+          <div class="lead"><span class="en">Option A · Low (≈1.0–1.2×)</span><span class="zh">方案 A · 低（≈1.0–1.2×）</span></div>
+          <p class="en"><strong>+</strong> Minimal gate contention; almost nobody admitted hits "sold out", so little post-admission disappointment.</p>
+          <p class="zh"><strong>+</strong> 闸口竞争最小；几乎没有被放行的人撞上"售罄"，放行后失望很少。</p>
+          <p class="en"><strong>−</strong> If abandonment is high (say 40%), you <strong>under-sell</strong> — units go unsold because too few admitted people actually buy.</p>
+          <p class="zh"><strong>−</strong> 若放弃率高（比如 40%），你会<strong>卖不足</strong>——真正下单的放行用户太少，单位卖不掉。</p>
+        </div>
+        <div class="card">
+          <div class="lead"><span class="en">Option B · High (2–3×)</span><span class="zh">方案 B · 高（2–3×）</span></div>
+          <p class="en"><strong>+</strong> You actually sell out even with heavy abandonment, maximizing revenue.</p>
+          <p class="zh"><strong>+</strong> 即使放弃率很高也能真正售罄，营收最大化。</p>
+          <p class="en"><strong>−</strong> More admitted users get rejected at <code>/reserve</code> ("sold out" after being let in) → disappointment for those who won admission but lost the race; somewhat more gate contention.</p>
+          <p class="zh"><strong>−</strong> 更多被放行用户在 <code>/reserve</code> 被拒（进来后才"售罄"）→ 赢得入场却输掉抢购的人会失望；闸口竞争略增。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="ct"><span class="en">When to use which</span><span class="zh">何时用哪个</span></span>
+        <p class="en">Tune to historical abandonment/conversion; a common start is <strong>~2×, adjusted live</strong> during the sale. Crucially, the atomic gate hard-caps at 1000, so over-admitting <strong>never oversells</strong> — worst case, some admitted users are rejected at reserve.</p>
+        <p class="zh">根据历史放弃率/转化率调参；常见起点是<strong>约 2×，并在抢购期间实时调整</strong>。关键在于：原子闸口把上限硬卡在 1000，所以超发<strong>绝不会超卖</strong>——最坏情况只是部分被放行用户在预订时被拒。</p>
+      </div>
     </section>
 
     <!-- 8 FOLLOW-UPS -->
